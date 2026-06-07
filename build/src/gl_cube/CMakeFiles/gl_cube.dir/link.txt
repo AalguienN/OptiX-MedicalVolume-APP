@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/gl_cube.dir/gl_cube.cpp.o -o gl_cube  /usr/lib/x86_64-linux-gnu/libglfw.so.3.3 /usr/local/cuda-13.1/lib64/libcudart_static.a -ldl /usr/lib/x86_64-linux-gnu/librt.a -ldl -lm /usr/lib/x86_64-linux-gnu/libGLX.so /usr/lib/x86_64-linux-gnu/libOpenGL.so /usr/lib/x86_64-linux-gnu/librt.a -lm 

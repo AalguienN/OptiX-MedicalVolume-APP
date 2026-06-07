@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/optixConsole.dir/optixConsole.cpp.o -o optixConsole  /usr/local/cuda-13.1/lib64/libcudart_static.a -ldl /usr/lib/x86_64-linux-gnu/librt.a -ldl -lm /usr/lib/x86_64-linux-gnu/librt.a -lm 
