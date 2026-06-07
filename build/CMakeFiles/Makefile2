@@ -63,42 +63,116 @@ CMAKE_BINARY_DIR = /home/adri/projects/TFM/optix_clone/build
 # Directory level rules for the build root directory
 
 # The main recursive "all" target.
-all: CMakeFiles/optixConsole.dir/all
+all: src/all
 .PHONY : all
 
 # The main recursive "preinstall" target.
-preinstall:
+preinstall: src/preinstall
 .PHONY : preinstall
 
 # The main recursive "clean" target.
-clean: CMakeFiles/optixConsole.dir/clean
+clean: src/clean
 .PHONY : clean
 
 #=============================================================================
-# Target rules for target CMakeFiles/optixConsole.dir
+# Directory level rules for directory src
+
+# Recursive "all" directory target.
+src/all: src/base/all
+src/all: src/optixConsole/all
+.PHONY : src/all
+
+# Recursive "preinstall" directory target.
+src/preinstall: src/base/preinstall
+src/preinstall: src/optixConsole/preinstall
+.PHONY : src/preinstall
+
+# Recursive "clean" directory target.
+src/clean: src/base/clean
+src/clean: src/optixConsole/clean
+.PHONY : src/clean
+
+#=============================================================================
+# Directory level rules for directory src/base
+
+# Recursive "all" directory target.
+src/base/all: src/base/CMakeFiles/base.dir/all
+.PHONY : src/base/all
+
+# Recursive "preinstall" directory target.
+src/base/preinstall:
+.PHONY : src/base/preinstall
+
+# Recursive "clean" directory target.
+src/base/clean: src/base/CMakeFiles/base.dir/clean
+.PHONY : src/base/clean
+
+#=============================================================================
+# Directory level rules for directory src/optixConsole
+
+# Recursive "all" directory target.
+src/optixConsole/all: src/optixConsole/CMakeFiles/optixConsole.dir/all
+.PHONY : src/optixConsole/all
+
+# Recursive "preinstall" directory target.
+src/optixConsole/preinstall:
+.PHONY : src/optixConsole/preinstall
+
+# Recursive "clean" directory target.
+src/optixConsole/clean: src/optixConsole/CMakeFiles/optixConsole.dir/clean
+.PHONY : src/optixConsole/clean
+
+#=============================================================================
+# Target rules for target src/base/CMakeFiles/base.dir
 
 # All Build rule for target.
-CMakeFiles/optixConsole.dir/all:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/optixConsole.dir/build.make CMakeFiles/optixConsole.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/optixConsole.dir/build.make CMakeFiles/optixConsole.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/adri/projects/TFM/optix_clone/build/CMakeFiles --progress-num=1,2,3 "Built target optixConsole"
-.PHONY : CMakeFiles/optixConsole.dir/all
+src/base/CMakeFiles/base.dir/all:
+	$(MAKE) $(MAKESILENT) -f src/base/CMakeFiles/base.dir/build.make src/base/CMakeFiles/base.dir/depend
+	$(MAKE) $(MAKESILENT) -f src/base/CMakeFiles/base.dir/build.make src/base/CMakeFiles/base.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/adri/projects/TFM/optix_clone/build/CMakeFiles --progress-num=1,2,3 "Built target base"
+.PHONY : src/base/CMakeFiles/base.dir/all
 
 # Build rule for subdir invocation for target.
-CMakeFiles/optixConsole.dir/rule: cmake_check_build_system
+src/base/CMakeFiles/base.dir/rule: cmake_check_build_system
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles 3
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/optixConsole.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/base/CMakeFiles/base.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles 0
-.PHONY : CMakeFiles/optixConsole.dir/rule
+.PHONY : src/base/CMakeFiles/base.dir/rule
 
 # Convenience name for target.
-optixConsole: CMakeFiles/optixConsole.dir/rule
+base: src/base/CMakeFiles/base.dir/rule
+.PHONY : base
+
+# clean rule for target.
+src/base/CMakeFiles/base.dir/clean:
+	$(MAKE) $(MAKESILENT) -f src/base/CMakeFiles/base.dir/build.make src/base/CMakeFiles/base.dir/clean
+.PHONY : src/base/CMakeFiles/base.dir/clean
+
+#=============================================================================
+# Target rules for target src/optixConsole/CMakeFiles/optixConsole.dir
+
+# All Build rule for target.
+src/optixConsole/CMakeFiles/optixConsole.dir/all:
+	$(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/depend
+	$(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/adri/projects/TFM/optix_clone/build/CMakeFiles --progress-num=4,5,6 "Built target optixConsole"
+.PHONY : src/optixConsole/CMakeFiles/optixConsole.dir/all
+
+# Build rule for subdir invocation for target.
+src/optixConsole/CMakeFiles/optixConsole.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles 3
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/optixConsole/CMakeFiles/optixConsole.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles 0
+.PHONY : src/optixConsole/CMakeFiles/optixConsole.dir/rule
+
+# Convenience name for target.
+optixConsole: src/optixConsole/CMakeFiles/optixConsole.dir/rule
 .PHONY : optixConsole
 
 # clean rule for target.
-CMakeFiles/optixConsole.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/optixConsole.dir/build.make CMakeFiles/optixConsole.dir/clean
-.PHONY : CMakeFiles/optixConsole.dir/clean
+src/optixConsole/CMakeFiles/optixConsole.dir/clean:
+	$(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/clean
+.PHONY : src/optixConsole/CMakeFiles/optixConsole.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

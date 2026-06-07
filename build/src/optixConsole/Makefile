@@ -87,14 +87,14 @@ rebuild_cache/fast: rebuild_cache
 
 # The main all target
 all: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles /home/adri/projects/TFM/optix_clone/build//CMakeFiles/progress.marks
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 all
+	cd /home/adri/projects/TFM/optix_clone/build && $(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles /home/adri/projects/TFM/optix_clone/build/src/optixConsole//CMakeFiles/progress.marks
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/optixConsole/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
 clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 clean
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/optixConsole/clean
 .PHONY : clean
 
 # The main clean target
@@ -103,44 +103,56 @@ clean/fast: clean
 
 # Prepare targets for installation.
 preinstall: all
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 preinstall
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/optixConsole/preinstall
 .PHONY : preinstall
 
 # Prepare targets for installation.
 preinstall/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 preinstall
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/optixConsole/preinstall
 .PHONY : preinstall/fast
 
 # clear depends
 depend:
-	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
+	cd /home/adri/projects/TFM/optix_clone/build && $(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
 .PHONY : depend
 
-#=============================================================================
-# Target rules for targets named base
+# Convenience name for target.
+src/optixConsole/CMakeFiles/optixConsole.dir/rule:
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/optixConsole/CMakeFiles/optixConsole.dir/rule
+.PHONY : src/optixConsole/CMakeFiles/optixConsole.dir/rule
 
-# Build rule for target.
-base: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 base
-.PHONY : base
-
-# fast build rule for target.
-base/fast:
-	$(MAKE) $(MAKESILENT) -f src/base/CMakeFiles/base.dir/build.make src/base/CMakeFiles/base.dir/build
-.PHONY : base/fast
-
-#=============================================================================
-# Target rules for targets named optixConsole
-
-# Build rule for target.
-optixConsole: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 optixConsole
+# Convenience name for target.
+optixConsole: src/optixConsole/CMakeFiles/optixConsole.dir/rule
 .PHONY : optixConsole
 
 # fast build rule for target.
 optixConsole/fast:
-	$(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/build
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/build
 .PHONY : optixConsole/fast
+
+optixConsole.o: optixConsole.cpp.o
+.PHONY : optixConsole.o
+
+# target to build an object file
+optixConsole.cpp.o:
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/optixConsole.cpp.o
+.PHONY : optixConsole.cpp.o
+
+optixConsole.i: optixConsole.cpp.i
+.PHONY : optixConsole.i
+
+# target to preprocess a source file
+optixConsole.cpp.i:
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/optixConsole.cpp.i
+.PHONY : optixConsole.cpp.i
+
+optixConsole.s: optixConsole.cpp.s
+.PHONY : optixConsole.s
+
+# target to generate assembly for a file
+optixConsole.cpp.s:
+	cd /home/adri/projects/TFM/optix_clone/build && $(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/optixConsole.cpp.s
+.PHONY : optixConsole.cpp.s
 
 # Help Target
 help:
@@ -150,8 +162,10 @@ help:
 	@echo "... depend"
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
-	@echo "... base"
 	@echo "... optixConsole"
+	@echo "... optixConsole.o"
+	@echo "... optixConsole.i"
+	@echo "... optixConsole.s"
 .PHONY : help
 
 
@@ -163,6 +177,6 @@ help:
 # No rule that depends on this can have commands that come from listfiles
 # because they might be regenerated.
 cmake_check_build_system:
-	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
+	cd /home/adri/projects/TFM/optix_clone/build && $(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
 .PHONY : cmake_check_build_system
 

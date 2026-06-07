@@ -1,6 +1,6 @@
 file(REMOVE_RECURSE
-  "CMakeFiles/optixConsole.dir/src/optixConsole.cpp.o"
-  "CMakeFiles/optixConsole.dir/src/optixConsole.cpp.o.d"
+  "CMakeFiles/optixConsole.dir/optixConsole.cpp.o"
+  "CMakeFiles/optixConsole.dir/optixConsole.cpp.o.d"
   "optixConsole"
   "optixConsole.optixir"
   "optixConsole.pdb"

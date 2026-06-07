@@ -1,8 +1,14 @@
 [
 {
-  "directory": "/home/adri/projects/TFM/optix_clone/build",
-  "command": "/usr/bin/c++ -DOPTIX_CONSOLE_OPTIXIR_PATH=\\\"/home/adri/projects/TFM/optix_clone/build/optixConsole.optixir\\\" -I/home/adri/nvidia/OptiX91/include -I/home/adri/projects/TFM/optix_clone/src -I/usr/local/cuda-13.1/include -O3 -DNDEBUG -std=gnu++11 -o CMakeFiles/optixConsole.dir/src/optixConsole.cpp.o -c /home/adri/projects/TFM/optix_clone/src/optixConsole.cpp",
-  "file": "/home/adri/projects/TFM/optix_clone/src/optixConsole.cpp",
-  "output": "CMakeFiles/optixConsole.dir/src/optixConsole.cpp.o"
+  "directory": "/home/adri/projects/TFM/optix_clone/build/src/base",
+  "command": "/usr/bin/c++ -DBASE_OPTIXIR_PATH=\\\"/home/adri/projects/TFM/optix_clone/build/src/base/base.optixir\\\" -I/home/adri/nvidia/OptiX91/include -I/home/adri/projects/TFM/optix_clone/src/base -I/home/adri/projects/TFM/optix_clone/src/common -I/usr/local/cuda-13.1/include -O3 -DNDEBUG -std=gnu++11 -o CMakeFiles/base.dir/base.cpp.o -c /home/adri/projects/TFM/optix_clone/src/base/base.cpp",
+  "file": "/home/adri/projects/TFM/optix_clone/src/base/base.cpp",
+  "output": "src/base/CMakeFiles/base.dir/base.cpp.o"
+},
+{
+  "directory": "/home/adri/projects/TFM/optix_clone/build/src/optixConsole",
+  "command": "/usr/bin/c++ -DOPTIX_CONSOLE_OPTIXIR_PATH=\\\"/home/adri/projects/TFM/optix_clone/build/src/optixConsole/optixConsole.optixir\\\" -I/home/adri/nvidia/OptiX91/include -I/home/adri/projects/TFM/optix_clone/src/optixConsole -I/home/adri/projects/TFM/optix_clone/src/common -I/usr/local/cuda-13.1/include -O3 -DNDEBUG -std=gnu++11 -o CMakeFiles/optixConsole.dir/optixConsole.cpp.o -c /home/adri/projects/TFM/optix_clone/src/optixConsole/optixConsole.cpp",
+  "file": "/home/adri/projects/TFM/optix_clone/src/optixConsole/optixConsole.cpp",
+  "output": "src/optixConsole/CMakeFiles/optixConsole.dir/optixConsole.cpp.o"
 }
 ]

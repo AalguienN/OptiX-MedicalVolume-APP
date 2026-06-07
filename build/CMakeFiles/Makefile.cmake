@@ -10,6 +10,9 @@ set(CMAKE_MAKEFILE_DEPENDS
   "/home/adri/projects/TFM/optix_clone/CMakeLists.txt"
   "CMakeFiles/3.28.3/CMakeCXXCompiler.cmake"
   "CMakeFiles/3.28.3/CMakeSystem.cmake"
+  "/home/adri/projects/TFM/optix_clone/src/CMakeLists.txt"
+  "/home/adri/projects/TFM/optix_clone/src/base/CMakeLists.txt"
+  "/home/adri/projects/TFM/optix_clone/src/optixConsole/CMakeLists.txt"
   "/usr/share/cmake-3.28/Modules/CMakeCXXCompiler.cmake.in"
   "/usr/share/cmake-3.28/Modules/CMakeCXXCompilerABI.cpp"
   "/usr/share/cmake-3.28/Modules/CMakeCXXInformation.cmake"
@@ -107,9 +110,13 @@ set(CMAKE_MAKEFILE_PRODUCTS
   "CMakeFiles/3.28.3/CMakeCXXCompiler.cmake"
   "CMakeFiles/3.28.3/CMakeCXXCompiler.cmake"
   "CMakeFiles/CMakeDirectoryInformation.cmake"
+  "src/CMakeFiles/CMakeDirectoryInformation.cmake"
+  "src/base/CMakeFiles/CMakeDirectoryInformation.cmake"
+  "src/optixConsole/CMakeFiles/CMakeDirectoryInformation.cmake"
   )
 
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
-  "CMakeFiles/optixConsole.dir/DependInfo.cmake"
+  "src/base/CMakeFiles/base.dir/DependInfo.cmake"
+  "src/optixConsole/CMakeFiles/optixConsole.dir/DependInfo.cmake"
   )
