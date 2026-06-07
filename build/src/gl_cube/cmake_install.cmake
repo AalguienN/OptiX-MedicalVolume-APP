@@ -1,4 +1,4 @@
-# Install script for directory: /home/adri/projects/TFM/optix_clone/src
+# Install script for directory: /home/adri/projects/TFM/optix_clone/src/gl_cube
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -40,20 +40,5 @@ endif()
 # Set default install directory permissions.
 if(NOT DEFINED CMAKE_OBJDUMP)
   set(CMAKE_OBJDUMP "/usr/bin/objdump")
-endif()
-
-if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  # Include the install script for the subdirectory.
-  include("/home/adri/projects/TFM/optix_clone/build/src/base/cmake_install.cmake")
-endif()
-
-if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  # Include the install script for the subdirectory.
-  include("/home/adri/projects/TFM/optix_clone/build/src/gl_cube/cmake_install.cmake")
-endif()
-
-if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  # Include the install script for the subdirectory.
-  include("/home/adri/projects/TFM/optix_clone/build/src/optixConsole/cmake_install.cmake")
 endif()
 

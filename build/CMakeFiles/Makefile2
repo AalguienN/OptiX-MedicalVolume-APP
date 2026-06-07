@@ -79,16 +79,19 @@ clean: src/clean
 
 # Recursive "all" directory target.
 src/all: src/base/all
+src/all: src/gl_cube/all
 src/all: src/optixConsole/all
 .PHONY : src/all
 
 # Recursive "preinstall" directory target.
 src/preinstall: src/base/preinstall
+src/preinstall: src/gl_cube/preinstall
 src/preinstall: src/optixConsole/preinstall
 .PHONY : src/preinstall
 
 # Recursive "clean" directory target.
 src/clean: src/base/clean
+src/clean: src/gl_cube/clean
 src/clean: src/optixConsole/clean
 .PHONY : src/clean
 
@@ -106,6 +109,21 @@ src/base/preinstall:
 # Recursive "clean" directory target.
 src/base/clean: src/base/CMakeFiles/base.dir/clean
 .PHONY : src/base/clean
+
+#=============================================================================
+# Directory level rules for directory src/gl_cube
+
+# Recursive "all" directory target.
+src/gl_cube/all: src/gl_cube/CMakeFiles/gl_cube.dir/all
+.PHONY : src/gl_cube/all
+
+# Recursive "preinstall" directory target.
+src/gl_cube/preinstall:
+.PHONY : src/gl_cube/preinstall
+
+# Recursive "clean" directory target.
+src/gl_cube/clean: src/gl_cube/CMakeFiles/gl_cube.dir/clean
+.PHONY : src/gl_cube/clean
 
 #=============================================================================
 # Directory level rules for directory src/optixConsole
@@ -149,13 +167,39 @@ src/base/CMakeFiles/base.dir/clean:
 .PHONY : src/base/CMakeFiles/base.dir/clean
 
 #=============================================================================
+# Target rules for target src/gl_cube/CMakeFiles/gl_cube.dir
+
+# All Build rule for target.
+src/gl_cube/CMakeFiles/gl_cube.dir/all:
+	$(MAKE) $(MAKESILENT) -f src/gl_cube/CMakeFiles/gl_cube.dir/build.make src/gl_cube/CMakeFiles/gl_cube.dir/depend
+	$(MAKE) $(MAKESILENT) -f src/gl_cube/CMakeFiles/gl_cube.dir/build.make src/gl_cube/CMakeFiles/gl_cube.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/adri/projects/TFM/optix_clone/build/CMakeFiles --progress-num=4,5,6 "Built target gl_cube"
+.PHONY : src/gl_cube/CMakeFiles/gl_cube.dir/all
+
+# Build rule for subdir invocation for target.
+src/gl_cube/CMakeFiles/gl_cube.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles 3
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/gl_cube/CMakeFiles/gl_cube.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/adri/projects/TFM/optix_clone/build/CMakeFiles 0
+.PHONY : src/gl_cube/CMakeFiles/gl_cube.dir/rule
+
+# Convenience name for target.
+gl_cube: src/gl_cube/CMakeFiles/gl_cube.dir/rule
+.PHONY : gl_cube
+
+# clean rule for target.
+src/gl_cube/CMakeFiles/gl_cube.dir/clean:
+	$(MAKE) $(MAKESILENT) -f src/gl_cube/CMakeFiles/gl_cube.dir/build.make src/gl_cube/CMakeFiles/gl_cube.dir/clean
+.PHONY : src/gl_cube/CMakeFiles/gl_cube.dir/clean
+
+#=============================================================================
 # Target rules for target src/optixConsole/CMakeFiles/optixConsole.dir
 
 # All Build rule for target.
 src/optixConsole/CMakeFiles/optixConsole.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/optixConsole/CMakeFiles/optixConsole.dir/build.make src/optixConsole/CMakeFiles/optixConsole.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/adri/projects/TFM/optix_clone/build/CMakeFiles --progress-num=4,5,6 "Built target optixConsole"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/adri/projects/TFM/optix_clone/build/CMakeFiles --progress-num=7,8,9 "Built target optixConsole"
 .PHONY : src/optixConsole/CMakeFiles/optixConsole.dir/all
 
 # Build rule for subdir invocation for target.

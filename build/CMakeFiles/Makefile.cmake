@@ -12,7 +12,12 @@ set(CMAKE_MAKEFILE_DEPENDS
   "CMakeFiles/3.28.3/CMakeSystem.cmake"
   "/home/adri/projects/TFM/optix_clone/src/CMakeLists.txt"
   "/home/adri/projects/TFM/optix_clone/src/base/CMakeLists.txt"
+  "/home/adri/projects/TFM/optix_clone/src/gl_cube/CMakeLists.txt"
   "/home/adri/projects/TFM/optix_clone/src/optixConsole/CMakeLists.txt"
+  "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3Config.cmake"
+  "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3ConfigVersion.cmake"
+  "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3Targets-none.cmake"
+  "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3Targets.cmake"
   "/usr/share/cmake-3.28/Modules/CMakeCXXCompiler.cmake.in"
   "/usr/share/cmake-3.28/Modules/CMakeCXXCompilerABI.cpp"
   "/usr/share/cmake-3.28/Modules/CMakeCXXInformation.cmake"
@@ -85,6 +90,7 @@ set(CMAKE_MAKEFILE_DEPENDS
   "/usr/share/cmake-3.28/Modules/Compiler/zOS-CXX-DetermineCompiler.cmake"
   "/usr/share/cmake-3.28/Modules/FindCUDA.cmake"
   "/usr/share/cmake-3.28/Modules/FindCUDA/select_compute_arch.cmake"
+  "/usr/share/cmake-3.28/Modules/FindOpenGL.cmake"
   "/usr/share/cmake-3.28/Modules/FindPackageHandleStandardArgs.cmake"
   "/usr/share/cmake-3.28/Modules/FindPackageMessage.cmake"
   "/usr/share/cmake-3.28/Modules/FindThreads.cmake"
@@ -112,11 +118,13 @@ set(CMAKE_MAKEFILE_PRODUCTS
   "CMakeFiles/CMakeDirectoryInformation.cmake"
   "src/CMakeFiles/CMakeDirectoryInformation.cmake"
   "src/base/CMakeFiles/CMakeDirectoryInformation.cmake"
+  "src/gl_cube/CMakeFiles/CMakeDirectoryInformation.cmake"
   "src/optixConsole/CMakeFiles/CMakeDirectoryInformation.cmake"
   )
 
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
   "src/base/CMakeFiles/base.dir/DependInfo.cmake"
+  "src/gl_cube/CMakeFiles/gl_cube.dir/DependInfo.cmake"
   "src/optixConsole/CMakeFiles/optixConsole.dir/DependInfo.cmake"
   )
