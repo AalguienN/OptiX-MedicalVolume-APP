@@ -31,7 +31,7 @@ target_include_directories(gl_cube PRIVATE
 )
 
 target_compile_definitions(gl_cube PRIVATE
-    GL_CUBE_OPTIXIR_PATH="${OPTIXIR_FILE}"
+    OPTIXIR_PATH="${OPTIXIR_FILE}"
 )
 
 target_link_libraries(gl_cube PRIVATE

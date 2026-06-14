@@ -296,9 +296,9 @@ int main(int argc, char* argv[])
 
             std::string optixIr;
             {
-                const char* path = std::getenv("OPTIX_CONSOLE_OPTIXIR_PATH");
+                const char* path = std::getenv("OPTIXIR_PATH");
                 if (!path)
-                    path = OPTIX_CONSOLE_OPTIXIR_PATH;
+                    path = OPTIXIR_PATH;
                 std::ifstream file(path, std::ios::binary);
                 if (!file)
                 {

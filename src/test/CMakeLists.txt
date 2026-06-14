@@ -1,5 +1,8 @@
-set(DEVICE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/optixConsole.cu")
-set(OPTIXIR_FILE "${CMAKE_CURRENT_BINARY_DIR}/optixConsole.optixir")
+find_package(glfw3 REQUIRED)
+find_package(OpenGL REQUIRED)
+
+set(DEVICE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/test.cu")
+set(OPTIXIR_FILE "${CMAKE_CURRENT_BINARY_DIR}/test.optixir")
 
 add_custom_command(
     OUTPUT ${OPTIXIR_FILE}
@@ -12,31 +15,33 @@ add_custom_command(
         -o ${OPTIXIR_FILE}
         ${DEVICE_SRC}
     DEPENDS ${DEVICE_SRC}
-    COMMENT "Compiling optixConsole.cu to OptiX IR"
+    COMMENT "Compiling test.cu to OptiX IR"
 )
 
-add_executable(optixConsole
-    optixConsole.cpp
+add_executable(test
+    test.cpp
     ${OPTIXIR_FILE}
 )
 
-target_include_directories(optixConsole PRIVATE
+target_include_directories(test PRIVATE
     ${OPTIX_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src/common
     ${CUDA_INCLUDE_DIRS}
 )
 
-target_compile_definitions(optixConsole PRIVATE
+target_compile_definitions(test PRIVATE
     OPTIXIR_PATH="${OPTIXIR_FILE}"
 )
 
-target_link_libraries(optixConsole PRIVATE
+target_link_libraries(test PRIVATE
+    glfw
+    OpenGL::GL
     ${CUDA_LIBRARIES}
     ${CUDA_cudart_LIBRARY}
     dl
 )
 
 if(UNIX)
-    target_link_libraries(optixConsole PRIVATE m)
+    target_link_libraries(test PRIVATE m)
 endif()

@@ -17,9 +17,9 @@
 #include <optix_stack_size.h>
 #include <optix_stubs.h>
 
-#include "gl_cube_fps.h"
-#include "vec_math.h"
+#include "test.h"
 #include "text_overlay.h"
+#include "vec_math.h"
 
 template <typename T> struct SbtRecord {
   __align__(
@@ -557,8 +557,10 @@ int main() {
           overlay.resize(static_cast<int>(width), static_cast<int>(height));
           params.image_width = width;
           params.image_height = height;
-          camera.aspect = static_cast<float>(width) / static_cast<float>(height);
-          glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+          camera.aspect =
+              static_cast<float>(width) / static_cast<float>(height);
+          glViewport(0, 0, static_cast<GLsizei>(width),
+                     static_cast<GLsizei>(height));
         }
       }
 
@@ -638,6 +640,6 @@ int main() {
     return 1;
   }
 
-    glfwTerminate();
-    return 0;
+  glfwTerminate();
+  return 0;
 }

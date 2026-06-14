@@ -28,7 +28,7 @@ target_include_directories(base PRIVATE
 )
 
 target_compile_definitions(base PRIVATE
-    BASE_OPTIXIR_PATH="${OPTIXIR_FILE}"
+    OPTIXIR_PATH="${OPTIXIR_FILE}"
 )
 
 target_link_libraries(base PRIVATE

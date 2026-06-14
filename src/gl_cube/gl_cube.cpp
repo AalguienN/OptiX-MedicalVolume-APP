@@ -421,9 +421,9 @@ int main()
 
             std::string optixIr;
             {
-                const char* path = std::getenv("GL_CUBE_OPTIXIR_PATH");
+                const char* path = std::getenv("OPTIXIR_PATH");
                 if (!path)
-                    path = GL_CUBE_OPTIXIR_PATH;
+                    path = OPTIXIR_PATH;
                 std::ifstream file(path, std::ios::binary);
                 if (!file)
                 {
