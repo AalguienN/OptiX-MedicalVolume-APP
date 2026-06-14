@@ -19,6 +19,7 @@
 
 #include "gl_cube_fps.h"
 #include "vec_math.h"
+#include "text_overlay.h"
 
 template <typename T> struct SbtRecord {
   __align__(
@@ -522,6 +523,9 @@ int main() {
     GlInteropBuffer gl_buffer;
     gl_buffer.init(width, height);
 
+    TextOverlay overlay;
+    overlay.init(width, height);
+
     Params params;
     params.image_width = width;
     params.image_height = height;
@@ -544,6 +548,9 @@ int main() {
       last_time = now;
 
       double fps = 1.0 / dt;
+      static double fps_smoothed = 0.0;
+      double alpha = 0.05;
+      fps_smoothed = alpha * fps + (1.0 - alpha) * fps_smoothed;
 
       camera.theta += static_cast<float>(dt * 0.5);
 
@@ -583,19 +590,9 @@ int main() {
       glBindTexture(GL_TEXTURE_2D, gl_buffer.texture);
       glBindVertexArray(fullscreen_vao);
       glDrawArrays(GL_TRIANGLES, 0, 6);
-      // En el loop, después de glDrawArrays y antes de glfwSwapBuffers:
-      // ImGui_ImplOpenGL3_NewFrame();
-      // ImGui_ImplGlfw_NewFrame();
-      // ImGui::NewFrame();
-      //
-      // ImGui::SetNextWindowPos({10, 10});
-      // ImGui::SetNextWindowBgAlpha(0.4f);
-      // ImGui::Begin("Stats", nullptr, ImGuiWindowFlags_NoDecoration |
-      // ImGuiWindowFlags_AlwaysAutoResize); ImGui::Text("%.1f FPS (%.2f ms)",
-      // fps_smoothed, 1000.0 / fps_smoothed); ImGui::End();
-      //
-      // ImGui::Render();
-      // ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+      char fps_buf[64];
+      std::snprintf(fps_buf, sizeof(fps_buf), "FPS: %.1f", fps_smoothed);
+      overlay.draw(10.0f, 10.0f, fps_buf, 1.0f, 0.7f, 0.7f, 0.7f);
 
       glfwSwapBuffers(window);
     }
@@ -608,6 +605,7 @@ int main() {
     CUDA_CHECK(cudaFree(reinterpret_cast<void *>(sbt.missRecordBase)));
     CUDA_CHECK(cudaFree(reinterpret_cast<void *>(sbt.hitgroupRecordBase)));
     gl_buffer.destroy();
+    overlay.destroy();
     OPTIX_CHECK(optixPipelineDestroy(pipeline));
     OPTIX_CHECK(optixProgramGroupDestroy(hitgroup_prog_group));
     OPTIX_CHECK(optixProgramGroupDestroy(miss_prog_group));
@@ -621,6 +619,6 @@ int main() {
     return 1;
   }
 
-  glfwTerminate();
-  return 0;
+    glfwTerminate();
+    return 0;
 }
