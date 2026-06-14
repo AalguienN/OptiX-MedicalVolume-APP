@@ -273,8 +273,8 @@ static void errorCallback(int error, const char *desc) {
 }
 
 int main() {
-  const unsigned int width = 800;
-  const unsigned int height = 600;
+  unsigned int width = 800;
+  unsigned int height = 600;
 
   glfwSetErrorCallback(errorCallback);
   if (!glfwInit()) {
@@ -296,6 +296,8 @@ int main() {
   }
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
+
+  glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
 
   GLuint fullscreen_vao;
   glGenVertexArrays(1, &fullscreen_vao);
@@ -542,6 +544,23 @@ int main() {
 
     while (!glfwWindowShouldClose(window)) {
       glfwPollEvents();
+
+      {
+        int fb_w, fb_h;
+        glfwGetFramebufferSize(window, &fb_w, &fb_h);
+        if (static_cast<unsigned int>(fb_w) != width ||
+            static_cast<unsigned int>(fb_h) != height) {
+          width = static_cast<unsigned int>(fb_w);
+          height = static_cast<unsigned int>(fb_h);
+          gl_buffer.destroy();
+          gl_buffer.init(width, height);
+          overlay.resize(static_cast<int>(width), static_cast<int>(height));
+          params.image_width = width;
+          params.image_height = height;
+          camera.aspect = static_cast<float>(width) / static_cast<float>(height);
+          glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        }
+      }
 
       double now = glfwGetTime();
       double dt = now - last_time;
