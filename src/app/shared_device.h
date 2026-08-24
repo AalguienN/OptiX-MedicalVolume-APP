@@ -8,8 +8,6 @@ struct Params
     uchar4*                image;
     unsigned int           image_width;
     unsigned int           image_height;
-    int                    origin_x;
-    int                    origin_y;
     OptixTraversableHandle handle;
 };
 
@@ -26,4 +24,11 @@ struct MissData
 
 struct HitGroupData
 {
+};
+
+template <typename T>
+struct SbtRecord
+{
+    __align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
+    T data;
 };

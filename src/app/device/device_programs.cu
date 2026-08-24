@@ -1,6 +1,6 @@
 #include <optix.h>
 
-#include "gl_cube.h"
+#include "../shared_device.h"
 #include "helpers.h"
 
 extern "C" {
