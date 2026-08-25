@@ -9,6 +9,7 @@
 #include "placeholder_scene.h"
 #include "shared_device.h"
 
+#include <GLFW/glfw3.h>
 #include <cuda_runtime.h>
 #include <optix.h>
 #include <optix_stubs.h>
@@ -16,6 +17,25 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+
+namespace {
+
+void glfwMouseButtonCallback(GLFWwindow *win, int button, int action, int /*mods*/) {
+    auto *cam = static_cast<Camera *>(glfwGetWindowUserPointer(win));
+    if (cam) cam->onMouseButton(button, action);
+}
+
+void glfwCursorPosCallback(GLFWwindow *win, double xpos, double ypos) {
+    auto *cam = static_cast<Camera *>(glfwGetWindowUserPointer(win));
+    if (cam) cam->onCursorPos(xpos, ypos);
+}
+
+void glfwScrollCallback(GLFWwindow *win, double /*xoffset*/, double yoffset) {
+    auto *cam = static_cast<Camera *>(glfwGetWindowUserPointer(win));
+    if (cam) cam->onScroll(yoffset);
+}
+
+}  // namespace
 
 int main() {
   unsigned int width = 800;
@@ -49,6 +69,16 @@ int main() {
     Camera camera;
     camera.aspect = static_cast<float>(width) / static_cast<float>(height);
 
+    glfwSetWindowUserPointer(window.handle(), &camera);
+    glfwSetMouseButtonCallback(window.handle(), glfwMouseButtonCallback);
+    glfwSetCursorPosCallback(window.handle(), glfwCursorPosCallback);
+    glfwSetScrollCallback(window.handle(), glfwScrollCallback);
+
+    double xpos, ypos;
+    glfwGetCursorPos(window.handle(), &xpos, &ypos);
+    camera.lastPos = make_float2(static_cast<float>(xpos),
+                                 static_cast<float>(ypos));
+
     Params params = {};
     params.image_width = width;
     params.image_height = height;
@@ -57,8 +87,6 @@ int main() {
     CUdeviceptr d_params = 0;
     CUDA_CHECK(
         cudaMalloc(reinterpret_cast<void **>(&d_params), sizeof(Params)));
-
-    double lastTime = glfwGetTime();
 
     while (!window.shouldClose()) {
       glfwPollEvents();
@@ -77,12 +105,6 @@ int main() {
         glViewport(0, 0, static_cast<GLsizei>(width),
                    static_cast<GLsizei>(height));
       }
-
-      double now = glfwGetTime();
-      double dt = now - lastTime;
-      lastTime = now;
-
-      camera.theta += static_cast<float>(dt * 0.5);
 
       float3 cam_U, cam_V, cam_W;
       camera.uvw(cam_U, cam_V, cam_W);
