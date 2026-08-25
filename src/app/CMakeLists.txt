@@ -14,6 +14,8 @@ add_executable(optix_app
     interop_buffer.cpp
     display.cpp
     placeholder_scene.cpp
+    dicom_loader.cpp
+    volume.cpp
     ${OPTIXIR_FILE}
 )
 

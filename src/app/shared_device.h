@@ -9,6 +9,15 @@ struct Params
     unsigned int           image_width;
     unsigned int           image_height;
     OptixTraversableHandle handle;
+
+    cudaTextureObject_t    volumeTex;
+    float4*                tfData;
+    int3                   volumeDims;
+    float3                 volumeSpacing;
+    float3                 volumeOrigin;
+    float3                 volumeMax;
+    float                  scalarMin;
+    float                  scalarMax;
 };
 
 struct RayGenData
