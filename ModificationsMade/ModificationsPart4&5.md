@@ -46,7 +46,7 @@ camera ray and returned a miss-gradient or a magenta closest-hit colour.
 | `shared_device.h` | Extended `Params` with `cudaTextureObject_t volumeTex`, `float4* tfData`, `int3 volumeDims`, `float3 volumeSpacing`, `float3 volumeOrigin`, `float3 volumeMax`, `float scalarMin`, `float scalarMax`. These carry the volume geometry, textures, and scalar-to-TF mapping range to the device. The TF data uses a raw device pointer rather than a texture object (see *Bug fixes*). |
 | `device/device_programs.cu` | Rewritten for volume ray casting. The raygen program computes a ray from camera UVW, performs manual ray–AABB intersection against the volume bounding box, then marches in fixed steps (half the minimum voxel spacing), sampling the 3D texture with trilinear interpolation, looking up colour/opacity in the 1D TF texture, and accumulating via front-to-back compositing. Miss and closest-hit are retained as stubs (background gradient / magenta) for pipeline validity but are not invoked in the volume path. |
 | `app_main.cpp` | Now accepts a CLI argument `<path-to-dicom-series>`. Loads the DICOM series, builds the volume, creates the transfer function (CT or MR), uploads textures to GPU, constructs the `Params` struct with all volume metadata, and runs the render loop with the updated raygen SBT record. Camera radius is derived from the volume bounding-box extent. |
-| `CMakeLists.txt` | Replaced `placeholder_scene.cpp` target references with `dicom_loader.cpp`, `volume.cpp`, and `volume_scene.cpp` (the latter was later reverted back to `placeholder_scene.cpp` after discovering OptiX 9.1 lacks `OPTIX_BUILD_INPUT_TYPE_AABB`; the GAS is unused). |
+| `CMakeLists.txt` | Replaced `placeholder_scene.cpp` target references with `dicom_loader.cpp`, `volume.cpp`, and `volume_scene.cpp` (the latter was later reverted back to `placeholder_scene.cpp` after the AABB-based GAS approach did not work as expected at runtime; `volume_scene.{h,cpp}` remain in the source tree but are not compiled). |
 
 ### DICOM parser design
 
@@ -79,7 +79,7 @@ normalized coordinates map directly to patient space.
 
 | Resource | Format | Filter | Normalized coords |
 |---|---|---|---|
-| Volume | `cudaArray` (3D, float) | Trilinear (`cudaFilterModeLinear`) | No (0–1 range) |
+| Volume | `cudaArray` (3D, float) | Trilinear (`cudaFilterModeLinear`) | Yes (0–1 range) |
 | Transfer function | `float4*` device pointer | Point (integer index) | N/A |
 
 The 3D texture enables the hardware trilinear interpolator to perform 8-tap interpolation in a

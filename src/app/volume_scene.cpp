@@ -18,23 +18,27 @@ void VolumeScene::init(OptixDeviceContext context, CUstream stream,
     context_ = context;
     stream_  = stream;
 
-    float aabb[6] = {
+    OptixAabb aabb = {
         bmin.x, bmin.y, bmin.z,
         bmax.x, bmax.y, bmax.z
     };
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_aabb_), sizeof(aabb)));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_aabb_), aabb,
-                          sizeof(aabb), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_aabb_), sizeof(OptixAabb)));
+    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_aabb_), &aabb,
+                          sizeof(OptixAabb), cudaMemcpyHostToDevice));
 
     uint32_t inputFlags[1] = { OPTIX_GEOMETRY_FLAG_NONE };
 
     OptixBuildInput buildInput = {};
-    buildInput.type                      = OPTIX_BUILD_INPUT_TYPE_AABB;
-    buildInput.aabbArray.aabbs           = reinterpret_cast<const float*>(d_aabb_);
-    buildInput.aabbArray.numAabbs        = 1;
-    buildInput.aabbArray.strideInBytes   = sizeof(float) * 6;
-    buildInput.aabbArray.inputFlags      = inputFlags;
-    buildInput.aabbArray.numSbtRecords   = 1;
+    buildInput.type                            = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
+    buildInput.customPrimitiveArray.aabbBuffers = &d_aabb_;
+    buildInput.customPrimitiveArray.numPrimitives        = 1;
+    buildInput.customPrimitiveArray.strideInBytes        = 0;
+    buildInput.customPrimitiveArray.flags                = inputFlags;
+    buildInput.customPrimitiveArray.numSbtRecords        = 1;
+    buildInput.customPrimitiveArray.sbtIndexOffsetBuffer           = 0;
+    buildInput.customPrimitiveArray.sbtIndexOffsetSizeInBytes      = 0;
+    buildInput.customPrimitiveArray.sbtIndexOffsetStrideInBytes    = 0;
+    buildInput.customPrimitiveArray.primitiveIndexOffset           = 0;
 
     OptixAccelBuildOptions accelOptions = {};
     accelOptions.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION;

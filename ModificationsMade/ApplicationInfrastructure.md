@@ -52,6 +52,10 @@ Supporting changes outside `src/app/`:
 - `src/common/check_macros.h`: single definition of `CUDA_CHECK`, `OPTIX_CHECK`, `OPTIX_CHECK_LOG`
   plus non-throwing `*_NOEXCEPT` variants used during cleanup (destructors must not throw).
 - `src/common/gl_check.h`: `GL_CHECK` and `GL_CHECK_NOEXCEPT`.
+- `src/common/vec_math.h`: host/device vector math utilities (`make_float3`, `cross`, `normalize`, etc.)
+  used by `camera.h` and `device_programs.cu`.
+- `src/common/helpers.h`: device-side helper functions (`make_color`, `toSRGB`, `quantizeUnsigned8Bits`)
+  used by the raygen program for final colour output.
 - `cmake/OptiXIR.cmake`: reusable CMake function `add_optix_ir_target()` encapsulating the nvcc
   `--optix-ir` invocation, replacing the per-directory copy-pasted custom command.
 - Root `CMakeLists.txt`: discovers CUDA, GLFW and OpenGL once; `src/CMakeLists.txt` builds only

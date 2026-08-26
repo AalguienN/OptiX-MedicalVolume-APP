@@ -44,6 +44,60 @@ static __forceinline__ __device__ bool intersectAABB(
     return tmin <= tmax && tmax > 0.0f;
 }
 
+static __forceinline__ __device__ float3 volumeMarch(float3 origin, float3 direction, float tmin, float tmax)
+{
+    float3 volumeSize = make_float3(
+        params.volumeDims.x * params.volumeSpacing.x,
+        params.volumeDims.y * params.volumeSpacing.y,
+        params.volumeDims.z * params.volumeSpacing.z);
+
+    float stepSize = fminf(params.volumeSpacing.x,
+                   fminf(params.volumeSpacing.y, params.volumeSpacing.z)) * 0.5f;
+
+    float accumR = 0.0f, accumG = 0.0f, accumB = 0.0f, accumA = 0.0f;
+
+    int maxSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
+    if (maxSteps > 4096) maxSteps = 4096;
+
+    for (int i = 0; i < maxSteps && accumA < 0.99f; ++i)
+    {
+        float t = tmin + i * stepSize;
+        float3 samplePos = origin + direction * t;
+        float3 texCoord = componentDiv(samplePos - params.volumeOrigin, volumeSize);
+
+        texCoord.x = fmaxf(0.0f, fminf(1.0f, texCoord.x));
+        texCoord.y = fmaxf(0.0f, fminf(1.0f, texCoord.y));
+        texCoord.z = fmaxf(0.0f, fminf(1.0f, texCoord.z));
+
+        float scalar = tex3D<float>(params.volumeTex,
+                                    texCoord.x, texCoord.y, texCoord.z);
+
+        float tf_t = (scalar - params.scalarMin) / (params.scalarMax - params.scalarMin) * 2047.0f;
+        int tfIdx = __float2int_rn(tf_t);
+        tfIdx = max(0, min(2047, tfIdx));
+        float4 tfVal = params.tfData[tfIdx];
+
+        float r = tfVal.x;
+        float g = tfVal.y;
+        float b = tfVal.z;
+        float a = tfVal.w * stepSize;
+
+        if (a > 0.001f)
+        {
+            float opacityFactor = (1.0f - accumA) * a;
+            accumR += opacityFactor * r;
+            accumG += opacityFactor * g;
+            accumB += opacityFactor * b;
+            accumA += opacityFactor;
+        }
+    }
+
+    return make_float3(accumR, accumG, accumB);
+}
+
+// ============================================================
+// Manual raygen program (no optixTrace — dense baseline)
+// ============================================================
 extern "C" __global__ void __raygen__rg()
 {
     const uint3 idx = optixGetLaunchIndex();
@@ -64,61 +118,97 @@ extern "C" __global__ void __raygen__rg()
     if (intersectAABB(origin, direction, params.volumeOrigin, params.volumeMax, tmin, tmax))
     {
         if (tmin < 0.0f) tmin = 0.0f;
-
-        float stepSize = fminf(params.volumeSpacing.x,
-                       fminf(params.volumeSpacing.y, params.volumeSpacing.z)) * 0.5f;
-
-        float3 volumeSize = make_float3(
-            params.volumeDims.x * params.volumeSpacing.x,
-            params.volumeDims.y * params.volumeSpacing.y,
-            params.volumeDims.z * params.volumeSpacing.z);
-
-        float accumR = 0.0f, accumG = 0.0f, accumB = 0.0f, accumA = 0.0f;
-
-        float t = tmin;
-        int maxSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
-        if (maxSteps > 4096) maxSteps = 4096;
-
-        for (int i = 0; i < maxSteps && accumA < 0.99f; ++i)
-        {
-            float3 samplePos = origin + direction * t;
-            float3 texCoord = componentDiv(samplePos - params.volumeOrigin, volumeSize);
-
-            texCoord.x = fmaxf(0.0f, fminf(1.0f, texCoord.x));
-            texCoord.y = fmaxf(0.0f, fminf(1.0f, texCoord.y));
-            texCoord.z = fmaxf(0.0f, fminf(1.0f, texCoord.z));
-
-            float scalar = tex3D<float>(params.volumeTex,
-                                        texCoord.x, texCoord.y, texCoord.z);
-
-            float tf_t = (scalar - params.scalarMin) / (params.scalarMax - params.scalarMin) * 2047.0f;
-            int tfIdx = __float2int_rn(tf_t);
-            tfIdx = max(0, min(2047, tfIdx));
-            float4 tfVal = params.tfData[tfIdx];
-
-            float r = tfVal.x;
-            float g = tfVal.y;
-            float b = tfVal.z;
-            float a = tfVal.w * stepSize;
-
-            if (a > 0.001f)
-            {
-                float opacityFactor = (1.0f - accumA) * a;
-                accumR += opacityFactor * r;
-                accumG += opacityFactor * g;
-                accumB += opacityFactor * b;
-                accumA += opacityFactor;
-            }
-
-            t += stepSize;
-        }
-
-        color = make_float3(accumR, accumG, accumB);
+        color = volumeMarch(origin, direction, tmin, tmax);
     }
 
     params.image[idx.y * params.image_width + idx.x] = make_color(color);
 }
 
+// ============================================================
+// OptiX raygen program — calls optixTrace, relies on
+// intersection + closest-hit programs for volume traversal.
+// ============================================================
+extern "C" __global__ void __raygen__rg_optix()
+{
+    const uint3 idx = optixGetLaunchIndex();
+    const uint3 dim = optixGetLaunchDimensions();
+
+    const RayGenData* rtData = (RayGenData*)optixGetSbtDataPointer();
+
+    float2 d = 2.0f * make_float2(
+        static_cast<float>(idx.x) / static_cast<float>(dim.x),
+        static_cast<float>(idx.y) / static_cast<float>(dim.y)) - 1.0f;
+
+    float3 origin    = rtData->cam_eye;
+    float3 direction = normalize(d.x * rtData->camera_u + d.y * rtData->camera_v + rtData->camera_w);
+
+    unsigned int p0 = __float_as_uint(0.0f);
+    unsigned int p1 = __float_as_uint(0.0f);
+    unsigned int p2 = __float_as_uint(0.0f);
+
+    optixTrace(params.handle,
+               origin,
+               direction,
+               0.0f,           // tmin
+               1e30f,          // tmax
+               0.0f,           // ray time
+               OptixVisibilityMask(0xFF),
+               OPTIX_RAY_FLAG_NONE,
+               0,              // SBT offset
+               1,              // SBT stride
+               0,              // miss SBT index
+               p0, p1, p2);
+
+    float3 color = make_float3(
+        __uint_as_float(p0),
+        __uint_as_float(p1),
+        __uint_as_float(p2));
+
+    params.image[idx.y * params.image_width + idx.x] = make_color(color);
+}
+
+// ============================================================
+// Intersection program — AABB slab test for the volume box.
+// Reports entry (tmin) and exit (tmax) as OptiX attributes.
+// ============================================================
+extern "C" __global__ void __intersection__is()
+{
+    float3 origin    = optixGetWorldRayOrigin();
+    float3 direction = optixGetWorldRayDirection();
+    float  tmin_ray  = optixGetRayTmin();
+    float  tmax_ray  = optixGetRayTmax();
+
+    float tmin, tmax;
+    if (!intersectAABB(origin, direction, params.volumeOrigin, params.volumeMax, tmin, tmax))
+        return;
+
+    tmin = fmaxf(tmin, tmin_ray);
+    tmax = fminf(tmax, tmax_ray);
+
+    if (tmin <= tmax)
+    {
+        optixReportIntersection(tmin, 0,
+            __float_as_uint(tmin),
+            __float_as_uint(tmax));
+    }
+}
+
+// ============================================================
+// Closest-hit program for volume path — receives entry/exit
+// t-values via attributes and performs the full volume march.
+// ============================================================
+extern "C" __global__ void __closesthit__ch_vol()
+{
+    float tmin = __uint_as_float(optixGetAttribute_0());
+    float tmax = __uint_as_float(optixGetAttribute_1());
+
+    float3 color = volumeMarch(optixGetWorldRayOrigin(), optixGetWorldRayDirection(), tmin, tmax);
+    setPayload(color);
+}
+
+// ============================================================
+// Stub programs (retained for pipeline validity)
+// ============================================================
 extern "C" __global__ void __miss__ms()
 {
     uint3 idx = optixGetLaunchIndex();

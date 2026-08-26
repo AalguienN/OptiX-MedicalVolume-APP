@@ -7,6 +7,8 @@
 
 #include "shared_device.h"
 
+enum class TraceMode { MANUAL, OPTIX };
+
 class PipelineBase
 {
 public:
@@ -20,28 +22,33 @@ public:
               const std::string& optixIrPath,
               const char*        raygenEntry,
               const char*        missEntry,
-              const char*        closestHitEntry);
+              const char*        closestHitEntry,
+              const char*        intersectionEntry,
+              TraceMode          mode);
 
     OptixPipeline            pipeline() { return pipeline_; }
     OptixShaderBindingTable* sbt() { return &sbt_; }
+    TraceMode                mode() const { return mode_; }
 
     void updateRayGenRecord(CUstream stream, const RayGenData& data);
 
 private:
     void createModule(const std::string& optixIrPath);
-    void createProgramGroups(const char* raygenEntry, const char* missEntry, const char* closestHitEntry);
+    void createProgramGroups(const char* raygenEntry, const char* missEntry,
+                             const char* closestHitEntry, const char* intersectionEntry);
     void createPipeline();
     void createSbt();
 
-    OptixDeviceContext             context_      = nullptr;
-    OptixPipelineCompileOptions    compileOptions_ = {};
-    OptixModule                    module_       = nullptr;
-    OptixProgramGroup              raygenPG_     = nullptr;
-    OptixProgramGroup              missPG_       = nullptr;
-    OptixProgramGroup              hitgroupPG_   = nullptr;
-    OptixPipeline                  pipeline_     = nullptr;
-    OptixShaderBindingTable        sbt_          = {};
-    CUdeviceptr                    raygenRecord_   = 0;
-    CUdeviceptr                    missRecord_     = 0;
-    CUdeviceptr                    hitgroupRecord_ = 0;
+    TraceMode                mode_         = TraceMode::MANUAL;
+    OptixDeviceContext       context_      = nullptr;
+    OptixPipelineCompileOptions compileOptions_ = {};
+    OptixModule              module_       = nullptr;
+    OptixProgramGroup        raygenPG_     = nullptr;
+    OptixProgramGroup        missPG_       = nullptr;
+    OptixProgramGroup        hitgroupPG_   = nullptr;
+    OptixPipeline            pipeline_     = nullptr;
+    OptixShaderBindingTable  sbt_          = {};
+    CUdeviceptr              raygenRecord_   = 0;
+    CUdeviceptr              missRecord_     = 0;
+    CUdeviceptr              hitgroupRecord_ = 0;
 };

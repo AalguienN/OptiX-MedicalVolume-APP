@@ -34,12 +34,15 @@ void PipelineBase::init(OptixDeviceContext context,
                         const std::string& optixIrPath,
                         const char*        raygenEntry,
                         const char*        missEntry,
-                        const char*        closestHitEntry)
+                        const char*        closestHitEntry,
+                        const char*        intersectionEntry,
+                        TraceMode          mode)
 {
     context_ = context;
+    mode_    = mode;
 
     createModule(optixIrPath);
-    createProgramGroups(raygenEntry, missEntry, closestHitEntry);
+    createProgramGroups(raygenEntry, missEntry, closestHitEntry, intersectionEntry);
     createPipeline();
     createSbt();
 }
@@ -54,7 +57,8 @@ void PipelineBase::createModule(const std::string& optixIrPath)
     compileOptions_.numAttributeValues          = 2;
     compileOptions_.exceptionFlags              = OPTIX_EXCEPTION_FLAG_NONE;
     compileOptions_.pipelineLaunchParamsVariableName = "params";
-    compileOptions_.usesPrimitiveTypeFlags      = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
+
+    compileOptions_.usesPrimitiveTypeFlags = 0;
 
     std::string optixIr;
     {
@@ -76,7 +80,8 @@ void PipelineBase::createModule(const std::string& optixIrPath)
                                       LOG, &LOG_SIZE, &module_));
 }
 
-void PipelineBase::createProgramGroups(const char* raygenEntry, const char* missEntry, const char* closestHitEntry)
+void PipelineBase::createProgramGroups(const char* raygenEntry, const char* missEntry,
+                                       const char* closestHitEntry, const char* intersectionEntry)
 {
     OptixProgramGroupOptions program_group_options = {};
 
@@ -103,6 +108,11 @@ void PipelineBase::createProgramGroups(const char* raygenEntry, const char* miss
         hitgroup_desc.kind                  = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hitgroup_desc.hitgroup.moduleCH     = module_;
         hitgroup_desc.hitgroup.entryFunctionNameCH = closestHitEntry;
+        if (mode_ == TraceMode::OPTIX && intersectionEntry)
+        {
+            hitgroup_desc.hitgroup.moduleIS     = module_;
+            hitgroup_desc.hitgroup.entryFunctionNameIS = intersectionEntry;
+        }
         OPTIX_CHECK_LOG(optixProgramGroupCreate(
             context_, &hitgroup_desc, 1, &program_group_options, LOG, &LOG_SIZE, &hitgroupPG_));
     }
@@ -111,7 +121,8 @@ void PipelineBase::createProgramGroups(const char* raygenEntry, const char* miss
 void PipelineBase::createPipeline()
 {
     OptixProgramGroup program_groups[] = { raygenPG_, missPG_, hitgroupPG_ };
-    const unsigned int num_groups = hitgroupPG_ ? 3 : 2;
+    unsigned int num_groups = 2;
+    if (hitgroupPG_)   ++num_groups;
 
     OptixPipelineLinkOptions link_options = {};
     link_options.maxTraceDepth            = 1;
