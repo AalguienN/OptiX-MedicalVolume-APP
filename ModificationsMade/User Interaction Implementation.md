@@ -11,17 +11,42 @@ volume in real time, matching the design specified in `tfm.tex:773-774`:
 
 - **Orbit rotation**: left-mouse drag rotates the camera around the look-at target.
 - **Zoom**: scroll wheel adjusts the distance (radius) to the target.
-- **Pan**: right-mesh drag translates the look-at point in the camera's local right/up plane.
+- **Pan**: right-mouse drag translates the look-at point in the camera's local right/up plane.
 - Every input event updates the camera state and the next frame reflects the most recent input.
 
 The camera and input handling remain part of the **shared front end**; no strategy-specific
 interaction logic is introduced (design principle: no strategy-specific interaction, `tfm.tex:774`).
 
+## Coordinate system
+
+The camera was reoriented from the default Y-up convention to a **Z-up, Y-forward** convention.
+The original spherical parameterisation placed the eye at:
+
+```
+eye = lookAt + (r·cos(φ)·sin(θ),  r·sin(φ),  r·cos(φ)·cos(θ))   // Y-up, looks along −Z
+```
+
+This was replaced with:
+
+```
+eye = lookAt + (r·cos(φ)·sin(θ), −r·cos(φ)·cos(θ),  r·sin(φ))   // Z-up, looks along −Y
+```
+
+Effectively the Y and Z components are swapped and the new Y component is negated, rotating
+the entire viewing frame 90° so that the former "up" axis (Y) now serves as the forward
+direction.  The world-up vector used for the UVW basis and pan computation is correspondingly
+changed from `(0, 1, 0)` to `(0, 0, 1)`.
+
+This reorientation was chosen because the DICOM volume data is most naturally inspected along
+its slice-stacking axis; placing the camera along −Y provides a direct view down that axis
+without needing to rotate the volume data itself.
+
 ## Starting point
 
 Before this change, `camera.h` was a header-only orbital camera with spherical coordinates
 (`theta`, `phi`, `radius`, `fovY`, `aspect`) producing an eye point and UVW basis via `eye()`
-and `uvw()`. It contained no input handling. In `app_main.cpp`, the camera was driven by
+and `uvw()`. It used a Y-up convention: world up was `(0, 1, 0)` and the default view looked
+along −Z. It contained no input handling. In `app_main.cpp`, the camera was driven by
 auto-increment (`camera.theta += dt * 0.5`), producing a continuously rotating view with no
 user control. The look-at target was hardcoded to `(0, 0, 0)` inside `uvw()`.
 
@@ -31,13 +56,15 @@ user control. The look-at target was hardcoded to `(0, 0, 0)` inside `uvw()`.
 
 | Aspect | Before | After |
 |---|---|---|
+| Coordinate convention | Y-up, default view along −Z | Z-up, default view along −Y (90° rotation of viewing frame) |
+| World-up vector | `(0, 1, 0)` | `(0, 0, 1)` |
+| `eye()` | `(r·cos(φ)·sin(θ),  r·sin(φ),  r·cos(φ)·cos(θ))` | `(r·cos(φ)·sin(θ), −r·cos(φ)·cos(θ),  r·sin(φ))` |
 | Look-at target | Hardcoded `(0,0,0)` inside `uvw()` | `float3 lookAt` member, defaults to `(0,0,0)`, used by `eye()` and `uvw()` |
-| `eye()` | `radius * spherical(theta, phi)` | `lookAt + radius * spherical(theta, phi)` |
-| `uvw()` | Looks at hardcoded origin | Looks at `lookAt` member |
+| `uvw()` | Looks at hardcoded origin, Y-up | Looks at `lookAt` member, Z-up |
 | Input state | None | `lastPos` (float2), `leftMouseDragging`, `rightMouseDragging` |
-| Orbit | N/A | `handleOrbit(dx, dy)` — adjusts `theta`/`phi` with sensitivity scaling; `phi` clamped to ±89° to prevent gimbal lock |
+| Orbit | N/A | `handleOrbit(dx, dy)` — adjusts `theta -= dx·kSensitivity`, `phi += dy·kSensitivity`; `phi` clamped to ±89° to prevent gimbal lock.  Negated dx maps screen-right to the correct orbital direction under the Z-up axis mapping. |
 | Zoom | N/A | `handleZoom(dy)` — scales `radius` by `(1 - dy * 0.1)`, clamped to minimum 0.1 |
-| Pan | N/A | `handlePan(dx, dy)` — translates `lookAt` along camera-local right and up vectors, scaled by `radius` for distance-relative speed |
+| Pan | N/A | `handlePan(dx, dy)` — translates `lookAt` along camera-local right and up vectors, both **negated** (`- right · dx - up · dy`), scaled by `radius` and a reduced speed factor (`0.001f` vs the original `0.005f`). The negation makes pan follow the cursor in an intuitive screen-space direction under the Z-up frame. |
 | GLFW callbacks | N/A | `onMouseButton(button, action)`, `onCursorPos(x, y)`, `onScroll(yoffset)` — thin wrappers that dispatch to the handlers above |
 
 **Design rationale**: all input logic lives in `Camera` so it can be tested and reused
