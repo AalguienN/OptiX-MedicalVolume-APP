@@ -102,6 +102,8 @@ int main(int argc, char** argv)
                 volume.originX + volSpanX * 0.5f,
                 volume.originY + volSpanY * 0.5f,
                 volume.originZ + volSpanZ * 0.5f);
+            camera.theta = 0.0f;
+            camera.phi   = 0.3f;
         }
 
         float vmin = 1e30f, vmax = -1e30f;
