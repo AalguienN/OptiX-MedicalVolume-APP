@@ -1,8 +1,10 @@
 #include "dicom_loader.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -81,28 +83,33 @@ float parseDS(const std::string& s)
     return static_cast<float>(std::strtod(s.c_str(), nullptr));
 }
 
+int parseInstanceNumber(const std::string& s)
+{
+    try
+    {
+        return std::stoi(s);
+    }
+    catch (const std::exception&)
+    {
+        return 0;
+    }
+}
+
 }  // namespace
 
 DicomSeries loadDicomSeries(const std::string& seriesPath)
 {
     std::vector<std::string> dcmFiles;
 
-    {
-        std::string cmd = "ls \"" + seriesPath + "\"/*.dcm 2>/dev/null";
-        FILE* pipe = popen(cmd.c_str(), "r");
-        if (!pipe)
-            throw std::runtime_error("Failed to list DICOM files in: " + seriesPath);
+    namespace fs = std::filesystem;
+    fs::path dirPath(seriesPath);
+    if (!fs::is_directory(dirPath))
+        throw std::runtime_error("Not a directory: " + seriesPath);
 
-        char buf[512];
-        while (fgets(buf, sizeof(buf), pipe))
-        {
-            std::string line(buf);
-            while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-                line.pop_back();
-            if (!line.empty())
-                dcmFiles.push_back(line);
-        }
-        pclose(pipe);
+    for (const auto& entry : fs::directory_iterator(dirPath))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".dcm")
+            dcmFiles.push_back(entry.path().string());
     }
 
     if (dcmFiles.empty())
@@ -164,6 +171,13 @@ DicomSeries loadDicomSeries(const std::string& seriesPath)
                 if (pixelLen > 0 && pixelLen < 0x7FFFFFFF)
                 {
                     size_t numPixels = pixelLen / sizeof(uint16_t);
+                    size_t expectedPixels = static_cast<size_t>(slice.rows) * slice.columns;
+                    if (expectedPixels > 0 && numPixels != expectedPixels)
+                    {
+                        std::cerr << "Warning: pixel count mismatch in " << filePath
+                                  << " (got " << numPixels << ", expected " << expectedPixels
+                                  << " = " << slice.rows << "x" << slice.columns << ")\n";
+                    }
                     slice.pixelData.resize(numPixels);
                     f.read(reinterpret_cast<char*>(slice.pixelData.data()),
                            static_cast<std::streamsize>(pixelLen));
@@ -288,7 +302,7 @@ DicomSeries loadDicomSeries(const std::string& seriesPath)
                     std::memcpy(slice.imageOrientation, vals, sizeof(vals));
                 }
                 else if (elem == 0x0013)
-                    slice.instanceNumber = std::stoi(readString());
+                    slice.instanceNumber = parseInstanceNumber(readString());
                 else
                     f.seekg(dataLen, std::ios::cur);
             }
@@ -314,9 +328,32 @@ DicomSeries loadDicomSeries(const std::string& seriesPath)
 
     series.modality = series.slices[0].modality;
 
+    const auto& ref = series.slices[0];
+    float normal[3];
+    {
+        float rX = ref.imageOrientation[0];
+        float rY = ref.imageOrientation[1];
+        float rZ = ref.imageOrientation[2];
+        float cX = ref.imageOrientation[3];
+        float cY = ref.imageOrientation[4];
+        float cZ = ref.imageOrientation[5];
+        normal[0] = rY * cZ - rZ * cY;
+        normal[1] = rZ * cX - rX * cZ;
+        normal[2] = rX * cY - rY * cX;
+    }
+
     std::sort(series.slices.begin(), series.slices.end(),
-              [](const DicomSlice& a, const DicomSlice& b)
-              { return a.instanceNumber < b.instanceNumber; });
+              [&](const DicomSlice& a, const DicomSlice& b)
+              {
+                  float da = normal[0] * a.imagePosition[0] +
+                             normal[1] * a.imagePosition[1] +
+                             normal[2] * a.imagePosition[2];
+                  float db = normal[0] * b.imagePosition[0] +
+                             normal[1] * b.imagePosition[1] +
+                             normal[2] * b.imagePosition[2];
+                  if (da != db) return da < db;
+                  return a.instanceNumber < b.instanceNumber;
+              });
 
     std::cout << "Loaded " << series.slices.size() << " slices from " << seriesPath
               << " (modality=" << series.modality << ", "
