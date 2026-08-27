@@ -5,6 +5,7 @@
 #include "gl_check.h"
 #include "gl_window.h"
 #include "interop_buffer.h"
+#include "metrics.h"
 #include "optix_context.h"
 #include "pipeline_base.h"
 #include "placeholder_scene.h"
@@ -25,27 +26,49 @@
 
 namespace {
 
+// Holds the per-window state so input callbacks can reach both the camera
+// (to mutate the view) and the shared metrics collector (to timestamp the
+// input event for latency measurement) without resorting to globals.
+struct WindowUserData
+{
+    Camera*          camera  = nullptr;
+    MetricsCollector* metrics = nullptr;
+};
+
+WindowUserData* userData(GLFWwindow* win)
+{
+    return static_cast<WindowUserData*>(glfwGetWindowUserPointer(win));
+}
+
 void glfwMouseButtonCallback(GLFWwindow *win, int button, int action, int /*mods*/) {
-    auto *cam = static_cast<Camera *>(glfwGetWindowUserPointer(win));
-    if (cam) cam->onMouseButton(button, action);
+    auto* ud = userData(win);
+    if (!ud) return;
+    if (ud->metrics) ud->metrics->onInputEvent();
+    if (ud->camera)  ud->camera->onMouseButton(button, action);
 }
 
 void glfwCursorPosCallback(GLFWwindow *win, double xpos, double ypos) {
-    auto *cam = static_cast<Camera *>(glfwGetWindowUserPointer(win));
-    if (cam) cam->onCursorPos(xpos, ypos);
+    auto* ud = userData(win);
+    if (!ud) return;
+    if (ud->metrics && ud->camera && ud->camera->leftMouseDragging) ud->metrics->onInputEvent();
+    if (ud->camera) ud->camera->onCursorPos(xpos, ypos);
 }
 
 void glfwScrollCallback(GLFWwindow *win, double /*xoffset*/, double yoffset) {
-    auto *cam = static_cast<Camera *>(glfwGetWindowUserPointer(win));
-    if (cam) cam->onScroll(yoffset);
+    auto* ud = userData(win);
+    if (!ud) return;
+    if (ud->metrics) ud->metrics->onInputEvent();
+    if (ud->camera)  ud->camera->onScroll(yoffset);
 }
 
 void printUsage(const char* prog) {
     std::cerr << "Usage: " << prog << " <path-to-dicom-series> [--mode manual|optix]\n"
               << "\n"
               << "Options:\n"
-              << "  --mode manual   Dense baseline: manual ray-AABB traversal in raygen (default)\n"
-              << "  --mode optix    OptiX trace: AABB GAS + intersection program + optixTrace\n";
+              << "  --mode manual      Dense baseline: manual ray-AABB traversal in raygen (default)\n"
+              << "  --mode optix       OptiX trace: AABB GAS + intersection program + optixTrace\n"
+              << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
+              << "  --window <n>       FPS observation window in frames (default 120)\n";
 }
 
 }  // namespace
@@ -60,6 +83,8 @@ int main(int argc, char** argv)
 
     std::string seriesPath = argv[1];
     TraceMode traceMode = TraceMode::MANUAL;
+    std::string metricsPath;
+    unsigned int metricsWindow = 120;
 
     for (int i = 2; i < argc; ++i)
     {
@@ -76,6 +101,14 @@ int main(int argc, char** argv)
                 printUsage(argv[0]);
                 return 1;
             }
+        }
+        else if (std::strcmp(argv[i], "--metrics") == 0 && i + 1 < argc)
+        {
+            metricsPath = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--window") == 0 && i + 1 < argc)
+        {
+            metricsWindow = static_cast<unsigned int>(std::strtoul(argv[++i], nullptr, 10));
         }
         else
         {
@@ -115,6 +148,14 @@ int main(int argc, char** argv)
 
         OptixContext optixContext;
         optixContext.init();
+
+        MetricsCollector metrics;
+        metrics.init(optixContext.stream(),
+                     metricsPath.empty() ? nullptr : metricsPath.c_str(),
+                     metricsWindow);
+
+        WindowUserData windowData;
+        windowData.metrics = &metrics;
 
         const char* raygenEntry;
         OptixTraversableHandle sceneHandle;
@@ -164,7 +205,8 @@ int main(int argc, char** argv)
                 std::cout << "Volume stats: range=[" << vmin << ", " << vmax << "]\n";
             }
 
-            glfwSetWindowUserPointer(window.handle(), &camera);
+            windowData.camera  = &camera;
+            glfwSetWindowUserPointer(window.handle(), &windowData);
             glfwSetMouseButtonCallback(window.handle(), glfwMouseButtonCallback);
             glfwSetCursorPosCallback(window.handle(), glfwCursorPosCallback);
             glfwSetScrollCallback(window.handle(), glfwScrollCallback);
@@ -207,6 +249,8 @@ int main(int argc, char** argv)
             CUdeviceptr d_params = 0;
             CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params), sizeof(Params)));
 
+            metrics.recordGpuMemory();
+
             std::cout << "Starting render loop (optix mode)...\n";
 
             while (!window.shouldClose())
@@ -246,9 +290,11 @@ int main(int argc, char** argv)
                 rgData.camera_w  = cam_W;
                 pipeline.updateRayGenRecord(optixContext.stream(), rgData);
 
+                metrics.beginFrame();
                 OPTIX_CHECK(optixLaunch(pipeline.pipeline(), optixContext.stream(),
                                         d_params, sizeof(Params), pipeline.sbt(),
                                         width, height, 1));
+                metrics.endFrame();
 
                 interopBuffer.unmap(optixContext.stream());
 
@@ -256,6 +302,20 @@ int main(int argc, char** argv)
 
                 window.swapBuffers();
             }
+
+            metrics.flush();
+
+            std::cout << "\nMetrics summary (optix mode):\n"
+                      << "  frames   : " << metrics.numFramesRecorded() << "\n"
+                      << "  render ms: mean=" << metrics.meanRenderMs()
+                      << " min=" << metrics.minRenderMs()
+                      << " max=" << metrics.maxRenderMs() << "\n"
+                      << "  fps      : mean=" << metrics.meanFps()
+                      << " latest=" << metrics.latestFps() << "\n"
+                      << "  gpu mem  : " << metrics.gpuMemoryBytes()
+                      << " bytes\n";
+            if (metrics.hasLatency())
+                std::cout << "  latency  : latest=" << metrics.latestLatencyMs() << " ms\n";
 
             CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_params)));
             volume.destroyDevice(d_volumeArray, volumeTex);
@@ -320,7 +380,8 @@ int main(int argc, char** argv)
                 std::cout << "Middle slice (z=" << midZ << "): " << nnz << "/" << volume.dimX * volume.dimY << " nonzero\n";
             }
 
-            glfwSetWindowUserPointer(window.handle(), &camera);
+            windowData.camera  = &camera;
+            glfwSetWindowUserPointer(window.handle(), &windowData);
             glfwSetMouseButtonCallback(window.handle(), glfwMouseButtonCallback);
             glfwSetCursorPosCallback(window.handle(), glfwCursorPosCallback);
             glfwSetScrollCallback(window.handle(), glfwScrollCallback);
@@ -363,6 +424,8 @@ int main(int argc, char** argv)
             CUdeviceptr d_params = 0;
             CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params), sizeof(Params)));
 
+            metrics.recordGpuMemory();
+
             std::cout << "Starting render loop (manual mode)...\n";
 
             while (!window.shouldClose())
@@ -402,9 +465,11 @@ int main(int argc, char** argv)
                 rgData.camera_w  = cam_W;
                 pipeline.updateRayGenRecord(optixContext.stream(), rgData);
 
+                metrics.beginFrame();
                 OPTIX_CHECK(optixLaunch(pipeline.pipeline(), optixContext.stream(),
                                         d_params, sizeof(Params), pipeline.sbt(),
                                         width, height, 1));
+                metrics.endFrame();
 
                 interopBuffer.unmap(optixContext.stream());
 
@@ -412,6 +477,20 @@ int main(int argc, char** argv)
 
                 window.swapBuffers();
             }
+
+            metrics.flush();
+
+            std::cout << "\nMetrics summary (manual mode):\n"
+                      << "  frames   : " << metrics.numFramesRecorded() << "\n"
+                      << "  render ms: mean=" << metrics.meanRenderMs()
+                      << " min=" << metrics.minRenderMs()
+                      << " max=" << metrics.maxRenderMs() << "\n"
+                      << "  fps      : mean=" << metrics.meanFps()
+                      << " latest=" << metrics.latestFps() << "\n"
+                      << "  gpu mem  : " << metrics.gpuMemoryBytes()
+                      << " bytes\n";
+            if (metrics.hasLatency())
+                std::cout << "  latency  : latest=" << metrics.latestLatencyMs() << " ms\n";
 
             CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_params)));
             volume.destroyDevice(d_volumeArray, volumeTex);

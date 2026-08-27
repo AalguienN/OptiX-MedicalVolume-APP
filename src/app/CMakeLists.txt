@@ -17,6 +17,7 @@ add_executable(optix_app
     volume_scene.cpp
     dicom_loader.cpp
     volume.cpp
+    ../common/metrics.cpp
     ${OPTIXIR_FILE}
 )
 
