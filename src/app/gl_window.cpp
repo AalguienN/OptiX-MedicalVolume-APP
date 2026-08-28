@@ -44,6 +44,9 @@ bool GlWindow::init(unsigned int width, unsigned int height, const char* title)
     }
 
     glfwMakeContextCurrent(window_);
+#ifdef _WIN32
+    glShimLoadModern();
+#endif
     glfwSwapInterval(1);
 
     return true;
