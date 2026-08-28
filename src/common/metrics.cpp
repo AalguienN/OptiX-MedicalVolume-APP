@@ -110,10 +110,14 @@ void MetricsCollector::advanceResultQueue()
     while (readIndex_ != writeIndex_ && pool_[readIndex_].used && guard++ < kEventPoolSize)
     {
         FrameSlot& slot = pool_[readIndex_];
-        cudaError_t err = cudaEventQuery(slot.end);
-        if (err == cudaErrorNotReady)
+        // Check manually: CUDA_CHECK(err) would shadow and initialize its
+        // own local 'err' from this one, reading an uninitialized value.
+        cudaError_t queryErr = cudaEventQuery(slot.end);
+        if (queryErr == cudaErrorNotReady)
             break;  // GPU hasn't finished it yet; read it on a later frame
-        CUDA_CHECK(err);
+        if (queryErr != cudaSuccess)
+            throw std::runtime_error(
+                std::string("cudaEventQuery failed: ") + cudaGetErrorString(queryErr));
 
         if (!slot.end || !slot.start)
             break;

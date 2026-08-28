@@ -42,18 +42,27 @@ uchar4* InteropBuffer::map(CUstream stream)
     uchar4* ptr = nullptr;
     size_t  size = 0;
     CUDA_CHECK(cudaGraphicsResourceGetMappedPointer(reinterpret_cast<void**>(&ptr), &size, resource_));
+    mapped_ = true;
     return ptr;
 }
 
 void InteropBuffer::unmap(CUstream stream)
 {
     CUDA_CHECK(cudaGraphicsUnmapResources(1, &resource_, stream));
+    mapped_ = false;
 }
 
 void InteropBuffer::destroy()
 {
     if (resource_)
+    {
+        // Unregistering a still-mapped resource fails; the destructor can
+        // run after a frame exception left the resource mapped.
+        if (mapped_)
+            CUDA_CHECK_NOEXCEPT(cudaGraphicsUnmapResources(1, &resource_, nullptr));
         CUDA_CHECK_NOEXCEPT(cudaGraphicsUnregisterResource(resource_));
+        mapped_ = false;
+    }
     if (pbo_)
         GL_CHECK_NOEXCEPT(glDeleteBuffers(1, &pbo_));
     resource_ = nullptr;
