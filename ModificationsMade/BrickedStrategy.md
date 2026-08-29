@@ -126,6 +126,67 @@ Host-side construction of the representation:
 
 - Added `bricked_volume.cpp` to the `optix_app` sources.
 
+## Bug fix: fixed-point loop in empty-brick skipping
+
+### Symptom
+
+With `--mode bricked` and the default `--epsilon 0.01`, thin 1-pixel-wide
+vertical/horizontal dark lines (gaps) appeared between bricks. They were only
+visible from certain (near-grazing) camera angles and disappeared entirely when
+running with `--epsilon 0`.
+
+### Root cause
+
+At `--epsilon 0`, `relevant = maxOpacity >= 0` holds for every brick that
+contains data, so the skip branch never fires and `brickMarch` degenerates to
+the dense baseline — which is why the artifacts vanished. The bug therefore
+lives entirely in the empty-brick skip path of `brickMarch()`.
+
+The skip advanced the ray as
+
+```
+t = clamp(tmin, bt1) + stepSize * 0.01
+```
+
+i.e. a fixed epsilon (1% of the step) measured **along the ray**, not across
+the brick's exit face. For rays that graze a brick face (ray direction ~0 along
+the exit face normal), that along-ray epsilon translates into an almost-zero
+advance across the face (`direction · eps`, ~1e-5–1e-6 world units). The float32
+reconstruction of the post-jump position (`origin + direction*t`, error
+~`t·2⁻²³` at DICOM scales) then floors back into the *same* empty brick; the
+next iteration recomputes the *same* `bt1` from the same AABB and sets the
+*same* `t` → an exact fixed point that burns the whole 4096-iteration budget
+without ever sampling the content beyond the brick → dark line. Only rays nearly
+parallel to a shared brick face hit it, which explains the angle dependence and
+the 1-pixel projected lines.
+
+### Fix (`src/app/device/device_programs.cu`, `brickMarch`, ~line 165)
+
+Guarantee monotonic progress: after computing the jump target, re-classify the
+post-jump position; if it still belongs to the same empty brick, fall back to a
+one-step advance instead of re-jumping.
+
+```cuda
+float tJump = fminf(tmax, fmaxf(tmin, bt1)) + stepSize * 0.01f;
+int3 nb = brickFromPos(origin + direction * tJump);
+if (brickLinearIndex(nb) == bIdx)
+    t += stepSize;          // exit face not cleared -> force real progress
+else
+    t = tJump;
+```
+
+Cost: one extra `brickFromPos` per skip (~nothing). The structurally robust
+alternative — deriving the next brick by incrementing the integer brick index
+along the exit axis (3D-DDA style) instead of re-flooring a reconstructed float
+position at the boundary — is noted as future work.
+
+### Verification
+
+- The 1-pixel brick-boundary lines at grazing angles are gone.
+- Non-grazing skipping is untouched: same jump target, same speedup.
+- Spot-check `--mode bricked` vs `--mode manual` around the previously affected
+  viewpoints.
+
 ## Verification
 
 CT lung dataset (512×512×90, HU [-1024, 1665]):

@@ -164,7 +164,12 @@ static __forceinline__ __device__ float3 brickMarch(float3 origin, float3 direct
                 float bt0, bt1;
                 if (intersectAABB(origin, direction, bmin, bmax, bt0, bt1))
                 {
-                    t = fminf(tmax, fmaxf(tmin, bt1)) + stepSize * 0.01f;
+                    float tJump = fminf(tmax, fmaxf(tmin, bt1)) + stepSize * 0.01f;
+                    int3 nb = brickFromPos(origin + direction * tJump);
+                    if (brickLinearIndex(nb) == bIdx)
+                        t += stepSize;  // exit face not cleared -> force real progress
+                    else
+                        t = tJump;
                 }
                 else
                 {
