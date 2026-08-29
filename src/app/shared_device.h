@@ -1,7 +1,22 @@
 #pragma once
 
+#include <cuda_runtime.h>
 #include <optix.h>
 #include <vector_types.h>
+
+// Per-brick metadata for the bricked / tiled strategy
+// (Section "Bricked / tiled volume" of the thesis). Each fixed-size brick
+// of n^3 voxels stores the min/max scalar value, the min/max opacity after
+// transfer-function application, and a flag telling whether the brick
+// contains any rendering-relevant voxel.
+struct BrickMeta
+{
+    float              minScalar;
+    float              maxScalar;
+    float              minOpacity;
+    float              maxOpacity;
+    unsigned int       relevant;   // 1 if maxOpacity >= epsilon
+};
 
 struct Params
 {
@@ -18,6 +33,12 @@ struct Params
     float3                 volumeMax;
     float                  scalarMin;
     float                  scalarMax;
+
+    // Bricked strategy fields (host sets them only for TraceMode::BRICKED).
+    BrickMeta*             brickMeta;      // device array, brickCount.x*y*z
+    int3                   brickDims;      // voxels per brick per axis
+    int3                   brickCount;     // bricks per axis (ceil)
+    float3                 brickSize;      // world-space extent per brick
 };
 
 struct RayGenData

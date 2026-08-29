@@ -108,7 +108,9 @@ void PipelineBase::createProgramGroups(const char* raygenEntry, const char* miss
         hitgroup_desc.kind                  = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hitgroup_desc.hitgroup.moduleCH     = module_;
         hitgroup_desc.hitgroup.entryFunctionNameCH = closestHitEntry;
-        if (mode_ == TraceMode::OPTIX && intersectionEntry)
+        // OptiX-traced modes (OPTIX and BRICKED) embed the intersection
+        // program in the hitgroup (OptiX 9.1 style).
+        if (mode_ != TraceMode::MANUAL && intersectionEntry)
         {
             hitgroup_desc.hitgroup.moduleIS     = module_;
             hitgroup_desc.hitgroup.entryFunctionNameIS = intersectionEntry;

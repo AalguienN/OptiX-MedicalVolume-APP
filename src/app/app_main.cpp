@@ -1,3 +1,4 @@
+#include "bricked_volume.h"
 #include "camera.h"
 #include "check_macros.h"
 #include "dicom_loader.h"
@@ -22,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <string>
 
 namespace {
@@ -62,13 +64,92 @@ void glfwScrollCallback(GLFWwindow *win, double /*xoffset*/, double yoffset) {
 }
 
 void printUsage(const char* prog) {
-    std::cerr << "Usage: " << prog << " <path-to-dicom-series> [--mode manual|optix]\n"
+    std::cerr << "Usage: " << prog << " <path-to-dicom-series> [--mode manual|optix|bricked]\n"
               << "\n"
               << "Options:\n"
               << "  --mode manual      Dense baseline: manual ray-AABB traversal in raygen (default)\n"
               << "  --mode optix       OptiX trace: AABB GAS + intersection program + optixTrace\n"
+              << "  --mode bricked     Bricked / tiled volume: subdivides the volume into bricks of\n"
+              << "                     n^3 voxels and skips empty bricks during traversal\n"
+              << "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked (default 16)\n"
+              << "  --epsilon <f>      Opacity threshold classifying a brick as rendering-relevant\n"
+              << "                     for --mode bricked (default 0.01)\n"
               << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
               << "  --window <n>       FPS observation window in frames (default 120)\n";
+}
+
+// Shared per-frame render loop. The Params struct is wired once before this
+// call; only the image pointer and its dimensions change across frames, so
+// they are updated here and uploaded with a single async host->device copy.
+void runRenderLoop(GlWindow& window, Display& display, InteropBuffer& interopBuffer,
+                   OptixContext& optixContext, PipelineBase& pipeline,
+                   MetricsCollector& metrics, Camera& camera,
+                   Params& params, CUdeviceptr d_params)
+{
+    while (!window.shouldClose())
+    {
+        glfwPollEvents();
+
+        int fb_w, fb_h;
+        window.framebufferSize(fb_w, fb_h);
+        if (params.image_width != static_cast<unsigned int>(fb_w) ||
+            params.image_height != static_cast<unsigned int>(fb_h))
+        {
+            unsigned int width  = static_cast<unsigned int>(fb_w);
+            unsigned int height = static_cast<unsigned int>(fb_h);
+            interopBuffer.resize(width, height);
+            display.resize(width, height);
+            camera.aspect = static_cast<float>(width) / static_cast<float>(height);
+            params.image_width  = width;
+            params.image_height = height;
+            glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        }
+
+        float3 cam_U, cam_V, cam_W;
+        camera.uvw(cam_U, cam_V, cam_W);
+
+        uchar4 *d_pixels = interopBuffer.map(optixContext.stream());
+        params.image = d_pixels;
+
+        CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(d_params), &params,
+                                   sizeof(Params), cudaMemcpyHostToDevice,
+                                   optixContext.stream()));
+
+        RayGenData rgData;
+        rgData.cam_eye   = camera.eye();
+        rgData.camera_u  = cam_U;
+        rgData.camera_v  = cam_V;
+        rgData.camera_w  = cam_W;
+        pipeline.updateRayGenRecord(optixContext.stream(), rgData);
+
+        metrics.beginFrame();
+        OPTIX_CHECK(optixLaunch(pipeline.pipeline(), optixContext.stream(),
+                                d_params, sizeof(Params), pipeline.sbt(),
+                                params.image_width, params.image_height, 1));
+        metrics.endFrame();
+
+        interopBuffer.unmap(optixContext.stream());
+
+        display.present(interopBuffer.pbo());
+
+        window.swapBuffers();
+    }
+
+    metrics.flush();
+}
+
+void printMetricsSummary(const MetricsCollector& metrics, const char* modeLabel)
+{
+    std::cout << "\nMetrics summary (" << modeLabel << " mode):\n"
+              << "  frames   : " << metrics.numFramesRecorded() << "\n"
+              << "  render ms: mean=" << metrics.meanRenderMs()
+              << " min=" << metrics.minRenderMs()
+              << " max=" << metrics.maxRenderMs() << "\n"
+              << "  fps      : mean=" << metrics.meanFps()
+              << " latest=" << metrics.latestFps() << "\n"
+              << "  gpu mem  : " << metrics.gpuMemoryBytes() << " bytes\n";
+    if (metrics.hasLatency())
+        std::cout << "  latency  : latest=" << metrics.latestLatencyMs() << " ms\n";
 }
 
 }  // namespace
@@ -85,6 +166,8 @@ int main(int argc, char** argv)
     TraceMode traceMode = TraceMode::MANUAL;
     std::string metricsPath;
     unsigned int metricsWindow = 120;
+    int brickSize = 16;
+    float brickEpsilon = 0.01f;
 
     for (int i = 2; i < argc; ++i)
     {
@@ -95,12 +178,22 @@ int main(int argc, char** argv)
                 traceMode = TraceMode::OPTIX;
             else if (std::strcmp(argv[i], "manual") == 0)
                 traceMode = TraceMode::MANUAL;
+            else if (std::strcmp(argv[i], "bricked") == 0)
+                traceMode = TraceMode::BRICKED;
             else
             {
                 std::cerr << "Unknown mode: " << argv[i] << "\n";
                 printUsage(argv[0]);
                 return 1;
             }
+        }
+        else if (std::strcmp(argv[i], "--brick-size") == 0 && i + 1 < argc)
+        {
+            brickSize = std::max(1, std::atoi(argv[++i]));
+        }
+        else if (std::strcmp(argv[i], "--epsilon") == 0 && i + 1 < argc)
+        {
+            brickEpsilon = std::strtof(argv[++i], nullptr);
         }
         else if (std::strcmp(argv[i], "--metrics") == 0 && i + 1 < argc)
         {
@@ -118,12 +211,16 @@ int main(int argc, char** argv)
         }
     }
 
-    unsigned int width = 1920;
-    unsigned int height = 1080;
+    const char* modeLabel =
+        (traceMode == TraceMode::OPTIX)   ? "optix"   :
+        (traceMode == TraceMode::BRICKED) ? "bricked" : "manual";
 
     try
     {
-        std::cout << "Trace mode: " << (traceMode == TraceMode::OPTIX ? "optix" : "manual") << "\n";
+        std::cout << "Trace mode: " << modeLabel << "\n";
+        if (traceMode == TraceMode::BRICKED)
+            std::cout << "Brick size: " << brickSize << "^3 voxels, epsilon="
+                      << brickEpsilon << "\n";
         std::cout << "Loading DICOM series from: " << seriesPath << "\n";
         DicomSeries series = loadDicomSeries(seriesPath);
 
@@ -137,14 +234,13 @@ int main(int argc, char** argv)
             tf.buildDefaultMR();
 
         GlWindow window;
-        if (!window.init(width, height, "OptiX Volume Renderer"))
+        if (!window.init(1920, 1080, "OptiX Volume Renderer"))
             return 1;
 
-        GL_CHECK(glViewport(0, 0, static_cast<GLsizei>(width),
-                            static_cast<GLsizei>(height)));
+        GL_CHECK(glViewport(0, 0, 1920, 1080));
 
         Display display;
-        display.init(width, height);
+        display.init(1920, 1080);
 
         OptixContext optixContext;
         optixContext.init();
@@ -157,345 +253,180 @@ int main(int argc, char** argv)
         WindowUserData windowData;
         windowData.metrics = &metrics;
 
-        const char* raygenEntry;
-        OptixTraversableHandle sceneHandle;
+        unsigned int width = 1920;
+        unsigned int height = 1080;
+
+        InteropBuffer interopBuffer;
+        interopBuffer.init(width, height);
+
+        Camera camera;
+        camera.aspect = static_cast<float>(width) / static_cast<float>(height);
+        {
+            float volSpanX = volume.dimX * volume.spacingX;
+            float volSpanY = volume.dimY * volume.spacingY;
+            float volSpanZ = volume.dimZ * volume.spacingZ;
+            camera.radius = fmaxf(volSpanX, fmaxf(volSpanY, volSpanZ)) * 1.5f;
+            camera.lookAt = make_float3(
+                volume.originX + volSpanX * 0.5f,
+                volume.originY + volSpanY * 0.5f,
+                volume.originZ + volSpanZ * 0.5f);
+            camera.theta = 0.0f;
+            camera.phi   = 0.3f;
+        }
+
+        float vmin = 1e30f, vmax = -1e30f;
+        {
+            size_t total = volume.data.size();
+            for (size_t i = 0; i < total; ++i)
+            {
+                float v = volume.data[i];
+                if (v < vmin) vmin = v;
+                if (v > vmax) vmax = v;
+            }
+            std::cout << "Volume stats: range=[" << vmin << ", " << vmax << "]\n";
+        }
+
+        if (traceMode == TraceMode::MANUAL)
+        {
+            size_t total = volume.data.size();
+            size_t nonzero = 0;
+            for (size_t i = 0; i < total; ++i)
+                if (volume.data[i] != 0.0f) nonzero++;
+            std::cout << "Volume stats: " << nonzero << "/" << total << " nonzero\n";
+
+            int cx = volume.dimX / 2, cy = volume.dimY / 2, cz = volume.dimZ / 2;
+            std::cout << "Center voxel [" << cx << "," << cy << "," << cz << "] = "
+                      << volume.data[cz * volume.dimX * volume.dimY + cy * volume.dimX + cx] << "\n";
+            std::cout << "Origin voxel [0,0,0] = " << volume.data[0] << "\n";
+
+            int midZ = volume.dimZ / 2;
+            int nnz = 0;
+            for (int y = 0; y < volume.dimY; ++y)
+                for (int x = 0; x < volume.dimX; ++x)
+                    if (volume.data[midZ * volume.dimX * volume.dimY + y * volume.dimX + x] != 0.0f)
+                        nnz++;
+            std::cout << "Middle slice (z=" << midZ << "): " << nnz << "/"
+                      << volume.dimX * volume.dimY << " nonzero\n";
+        }
+
+        windowData.camera  = &camera;
+        glfwSetWindowUserPointer(window.handle(), &windowData);
+        glfwSetMouseButtonCallback(window.handle(), glfwMouseButtonCallback);
+        glfwSetCursorPosCallback(window.handle(), glfwCursorPosCallback);
+        glfwSetScrollCallback(window.handle(), glfwScrollCallback);
+
+        double xpos, ypos;
+        glfwGetCursorPos(window.handle(), &xpos, &ypos);
+        camera.lastPos = make_float2(static_cast<float>(xpos),
+                                     static_cast<float>(ypos));
+
+        cudaArray* d_volumeArray = nullptr;
+        cudaTextureObject_t volumeTex = 0;
+        volume.uploadToDevice(&d_volumeArray, &volumeTex);
+
+        float4* d_tfData = nullptr;
+        {
+            size_t tfBytes = sizeof(float4) * TransferFunction::LUT_SIZE;
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_tfData), tfBytes));
+            CUDA_CHECK(cudaMemcpy(d_tfData, tf.lut, tfBytes, cudaMemcpyHostToDevice));
+        }
+
+        float scalarMin, scalarMax;
+        if (volume.modality == "CT") {
+            scalarMin = -1000.0f;
+            scalarMax =  1000.0f;
+        } else {
+            scalarMin = 0.0f;
+            scalarMax = 4096.0f;
+        }
+
+        const char* irPath = std::getenv("OPTIXIR_PATH");
+
+        // Per-strategy setup: scene (acceleration structure) and the OptiX
+        // program entry points that implement the strategy's traversal.
+        std::unique_ptr<VolumeScene> volScene;
+        std::unique_ptr<PlaceholderScene> placeScene;
+        std::unique_ptr<BrickedVolume> brickVol;
+        std::unique_ptr<PipelineBase> pipeline;
+
+        Params params = {};
+        params.image_width  = width;
+        params.image_height = height;
+        params.volumeTex    = volumeTex;
+        params.tfData       = d_tfData;
+        params.volumeDims   = make_int3(volume.dimX, volume.dimY, volume.dimZ);
+        params.volumeSpacing = make_float3(volume.spacingX, volume.spacingY, volume.spacingZ);
+        params.volumeOrigin  = make_float3(volume.originX, volume.originY, volume.originZ);
+        params.volumeMax     = make_float3(volume.maxX(), volume.maxY(), volume.maxZ());
+        params.scalarMin     = scalarMin;
+        params.scalarMax     = scalarMax;
 
         if (traceMode == TraceMode::OPTIX)
         {
-            VolumeScene volScene;
-            volScene.init(optixContext.context(), optixContext.stream(),
-                          make_float3(volume.originX, volume.originY, volume.originZ),
-                          make_float3(volume.maxX(), volume.maxY(), volume.maxZ()));
-            sceneHandle = volScene.handle();
-            raygenEntry = "__raygen__rg_optix";
+            volScene.reset(new VolumeScene);
+            volScene->init(optixContext.context(), optixContext.stream(),
+                           make_float3(volume.originX, volume.originY, volume.originZ),
+                           make_float3(volume.maxX(), volume.maxY(), volume.maxZ()));
+            params.handle = volScene->handle();
 
-            const char *irPath = std::getenv("OPTIXIR_PATH");
-            PipelineBase pipeline;
-            pipeline.init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
-                          raygenEntry, "__miss__ms", "__closesthit__ch_vol",
-                          "__intersection__is", TraceMode::OPTIX);
+            pipeline.reset(new PipelineBase);
+            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
+                           "__raygen__rg_optix", "__miss__ms", "__closesthit__ch_vol",
+                           "__intersection__is", TraceMode::OPTIX);
+        }
+        else if (traceMode == TraceMode::BRICKED)
+        {
+            volScene.reset(new VolumeScene);
+            volScene->init(optixContext.context(), optixContext.stream(),
+                           make_float3(volume.originX, volume.originY, volume.originZ),
+                           make_float3(volume.maxX(), volume.maxY(), volume.maxZ()));
+            params.handle = volScene->handle();
 
-            InteropBuffer interopBuffer;
-            interopBuffer.init(width, height);
+            brickVol.reset(new BrickedVolume);
+            brickVol->build(volume, tf, brickSize, scalarMin, scalarMax, brickEpsilon);
+            params.brickMeta  = brickVol->deviceMeta();
+            params.brickDims  = brickVol->brickDims();
+            params.brickCount = brickVol->brickCount();
+            params.brickSize  = brickVol->brickSize();
 
-            Camera camera;
-            camera.aspect = static_cast<float>(width) / static_cast<float>(height);
-            {
-                float volSpanX = volume.dimX * volume.spacingX;
-                float volSpanY = volume.dimY * volume.spacingY;
-                float volSpanZ = volume.dimZ * volume.spacingZ;
-                camera.radius = fmaxf(volSpanX, fmaxf(volSpanY, volSpanZ)) * 1.5f;
-                camera.lookAt = make_float3(
-                    volume.originX + volSpanX * 0.5f,
-                    volume.originY + volSpanY * 0.5f,
-                    volume.originZ + volSpanZ * 0.5f);
-                camera.theta = 0.0f;
-                camera.phi   = 0.3f;
-            }
+            std::cout << "Brick grid: " << params.brickCount.x << "x"
+                      << params.brickCount.y << "x" << params.brickCount.z << " bricks, "
+                      << brickVol->numRelevantBricks() << "/" << brickVol->numBricks()
+                      << " relevant, metadata " << brickVol->metadataBytes() / 1024.0
+                      << " KiB\n";
 
-            float vmin = 1e30f, vmax = -1e30f;
-            {
-                size_t total = volume.data.size();
-                for (size_t i = 0; i < total; ++i)
-                {
-                    float v = volume.data[i];
-                    if (v < vmin) vmin = v;
-                    if (v > vmax) vmax = v;
-                }
-                std::cout << "Volume stats: range=[" << vmin << ", " << vmax << "]\n";
-            }
-
-            windowData.camera  = &camera;
-            glfwSetWindowUserPointer(window.handle(), &windowData);
-            glfwSetMouseButtonCallback(window.handle(), glfwMouseButtonCallback);
-            glfwSetCursorPosCallback(window.handle(), glfwCursorPosCallback);
-            glfwSetScrollCallback(window.handle(), glfwScrollCallback);
-
-            double xpos, ypos;
-            glfwGetCursorPos(window.handle(), &xpos, &ypos);
-            camera.lastPos = make_float2(static_cast<float>(xpos),
-                                         static_cast<float>(ypos));
-
-            cudaArray* d_volumeArray = nullptr;
-            cudaTextureObject_t volumeTex = 0;
-            volume.uploadToDevice(&d_volumeArray, &volumeTex);
-
-            float4* d_tfData = nullptr;
-            {
-                size_t tfBytes = sizeof(float4) * TransferFunction::LUT_SIZE;
-                CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_tfData), tfBytes));
-                CUDA_CHECK(cudaMemcpy(d_tfData, tf.lut, tfBytes, cudaMemcpyHostToDevice));
-            }
-
-            Params params = {};
-            params.image_width    = width;
-            params.image_height   = height;
-            params.handle         = sceneHandle;
-            params.volumeTex      = volumeTex;
-            params.tfData          = d_tfData;
-            params.volumeDims     = make_int3(volume.dimX, volume.dimY, volume.dimZ);
-            params.volumeSpacing  = make_float3(volume.spacingX, volume.spacingY, volume.spacingZ);
-            params.volumeOrigin   = make_float3(volume.originX, volume.originY, volume.originZ);
-            params.volumeMax      = make_float3(volume.maxX(), volume.maxY(), volume.maxZ());
-
-            if (volume.modality == "CT") {
-                params.scalarMin = -1000.0f;
-                params.scalarMax =  1000.0f;
-            } else {
-                params.scalarMin = 0.0f;
-                params.scalarMax = 4096.0f;
-            }
-
-            CUdeviceptr d_params = 0;
-            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params), sizeof(Params)));
-
-            metrics.recordGpuMemory();
-
-            std::cout << "Starting render loop (optix mode)...\n";
-
-            while (!window.shouldClose())
-            {
-                glfwPollEvents();
-
-                int fb_w, fb_h;
-                window.framebufferSize(fb_w, fb_h);
-                if (static_cast<unsigned int>(fb_w) != width ||
-                    static_cast<unsigned int>(fb_h) != height)
-                {
-                    width  = static_cast<unsigned int>(fb_w);
-                    height = static_cast<unsigned int>(fb_h);
-                    interopBuffer.resize(width, height);
-                    display.resize(width, height);
-                    camera.aspect = static_cast<float>(width) / static_cast<float>(height);
-                    params.image_width  = width;
-                    params.image_height = height;
-                    glViewport(0, 0, static_cast<GLsizei>(width),
-                               static_cast<GLsizei>(height));
-                }
-
-                float3 cam_U, cam_V, cam_W;
-                camera.uvw(cam_U, cam_V, cam_W);
-
-                uchar4 *d_pixels = interopBuffer.map(optixContext.stream());
-                params.image = d_pixels;
-
-                CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(d_params), &params,
-                                           sizeof(Params), cudaMemcpyHostToDevice,
-                                           optixContext.stream()));
-
-                RayGenData rgData;
-                rgData.cam_eye   = camera.eye();
-                rgData.camera_u  = cam_U;
-                rgData.camera_v  = cam_V;
-                rgData.camera_w  = cam_W;
-                pipeline.updateRayGenRecord(optixContext.stream(), rgData);
-
-                metrics.beginFrame();
-                OPTIX_CHECK(optixLaunch(pipeline.pipeline(), optixContext.stream(),
-                                        d_params, sizeof(Params), pipeline.sbt(),
-                                        width, height, 1));
-                metrics.endFrame();
-
-                interopBuffer.unmap(optixContext.stream());
-
-                display.present(interopBuffer.pbo());
-
-                window.swapBuffers();
-            }
-
-            metrics.flush();
-
-            std::cout << "\nMetrics summary (optix mode):\n"
-                      << "  frames   : " << metrics.numFramesRecorded() << "\n"
-                      << "  render ms: mean=" << metrics.meanRenderMs()
-                      << " min=" << metrics.minRenderMs()
-                      << " max=" << metrics.maxRenderMs() << "\n"
-                      << "  fps      : mean=" << metrics.meanFps()
-                      << " latest=" << metrics.latestFps() << "\n"
-                      << "  gpu mem  : " << metrics.gpuMemoryBytes()
-                      << " bytes\n";
-            if (metrics.hasLatency())
-                std::cout << "  latency  : latest=" << metrics.latestLatencyMs() << " ms\n";
-
-            CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_params)));
-            volume.destroyDevice(d_volumeArray, volumeTex);
-            if (d_tfData) cudaFree(d_tfData);
+            pipeline.reset(new PipelineBase);
+            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
+                           "__raygen__rg_optix", "__miss__ms", "__closesthit__ch_brick",
+                           "__intersection__is", TraceMode::BRICKED);
         }
         else
         {
-            PlaceholderScene scene;
-            scene.init(optixContext.context(), optixContext.stream());
-            sceneHandle = scene.handle();
-            raygenEntry = "__raygen__rg";
+            placeScene.reset(new PlaceholderScene);
+            placeScene->init(optixContext.context(), optixContext.stream());
+            params.handle = placeScene->handle();
 
-            const char *irPath = std::getenv("OPTIXIR_PATH");
-            PipelineBase pipeline;
-            pipeline.init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
-                          raygenEntry, "__miss__ms", "__closesthit__ch",
-                          nullptr, TraceMode::MANUAL);
-
-            InteropBuffer interopBuffer;
-            interopBuffer.init(width, height);
-
-            Camera camera;
-            camera.aspect = static_cast<float>(width) / static_cast<float>(height);
-            {
-                float volSpanX = volume.dimX * volume.spacingX;
-                float volSpanY = volume.dimY * volume.spacingY;
-                float volSpanZ = volume.dimZ * volume.spacingZ;
-                camera.radius = fmaxf(volSpanX, fmaxf(volSpanY, volSpanZ)) * 1.5f;
-                camera.lookAt = make_float3(
-                    volume.originX + volSpanX * 0.5f,
-                    volume.originY + volSpanY * 0.5f,
-                    volume.originZ + volSpanZ * 0.5f);
-                camera.theta = 0.0f;
-                camera.phi   = 0.3f;
-            }
-
-            float vmin = 1e30f, vmax = -1e30f;
-            {
-                size_t total = volume.data.size();
-                size_t nonzero = 0;
-                for (size_t i = 0; i < total; ++i)
-                {
-                    float v = volume.data[i];
-                    if (v != 0.0f) nonzero++;
-                    if (v < vmin) vmin = v;
-                    if (v > vmax) vmax = v;
-                }
-                std::cout << "Volume stats: " << nonzero << "/" << total
-                          << " nonzero, range=[" << vmin << ", " << vmax << "]\n";
-
-                int cx = volume.dimX / 2, cy = volume.dimY / 2, cz = volume.dimZ / 2;
-                std::cout << "Center voxel [" << cx << "," << cy << "," << cz << "] = "
-                          << volume.data[cz * volume.dimX * volume.dimY + cy * volume.dimX + cx] << "\n";
-                std::cout << "Origin voxel [0,0,0] = " << volume.data[0] << "\n";
-
-                int midZ = volume.dimZ / 2;
-                int nnz = 0;
-                for (int y = 0; y < volume.dimY; ++y)
-                    for (int x = 0; x < volume.dimX; ++x)
-                        if (volume.data[midZ * volume.dimX * volume.dimY + y * volume.dimX + x] != 0.0f)
-                            nnz++;
-                std::cout << "Middle slice (z=" << midZ << "): " << nnz << "/" << volume.dimX * volume.dimY << " nonzero\n";
-            }
-
-            windowData.camera  = &camera;
-            glfwSetWindowUserPointer(window.handle(), &windowData);
-            glfwSetMouseButtonCallback(window.handle(), glfwMouseButtonCallback);
-            glfwSetCursorPosCallback(window.handle(), glfwCursorPosCallback);
-            glfwSetScrollCallback(window.handle(), glfwScrollCallback);
-
-            double xpos, ypos;
-            glfwGetCursorPos(window.handle(), &xpos, &ypos);
-            camera.lastPos = make_float2(static_cast<float>(xpos),
-                                         static_cast<float>(ypos));
-
-            cudaArray* d_volumeArray = nullptr;
-            cudaTextureObject_t volumeTex = 0;
-            volume.uploadToDevice(&d_volumeArray, &volumeTex);
-
-            float4* d_tfData = nullptr;
-            {
-                size_t tfBytes = sizeof(float4) * TransferFunction::LUT_SIZE;
-                CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_tfData), tfBytes));
-                CUDA_CHECK(cudaMemcpy(d_tfData, tf.lut, tfBytes, cudaMemcpyHostToDevice));
-            }
-
-            Params params = {};
-            params.image_width    = width;
-            params.image_height   = height;
-            params.handle         = sceneHandle;
-            params.volumeTex      = volumeTex;
-            params.tfData          = d_tfData;
-            params.volumeDims     = make_int3(volume.dimX, volume.dimY, volume.dimZ);
-            params.volumeSpacing  = make_float3(volume.spacingX, volume.spacingY, volume.spacingZ);
-            params.volumeOrigin   = make_float3(volume.originX, volume.originY, volume.originZ);
-            params.volumeMax      = make_float3(volume.maxX(), volume.maxY(), volume.maxZ());
-
-            if (volume.modality == "CT") {
-                params.scalarMin = -1000.0f;
-                params.scalarMax =  1000.0f;
-            } else {
-                params.scalarMin = 0.0f;
-                params.scalarMax = 4096.0f;
-            }
-
-            CUdeviceptr d_params = 0;
-            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params), sizeof(Params)));
-
-            metrics.recordGpuMemory();
-
-            std::cout << "Starting render loop (manual mode)...\n";
-
-            while (!window.shouldClose())
-            {
-                glfwPollEvents();
-
-                int fb_w, fb_h;
-                window.framebufferSize(fb_w, fb_h);
-                if (static_cast<unsigned int>(fb_w) != width ||
-                    static_cast<unsigned int>(fb_h) != height)
-                {
-                    width  = static_cast<unsigned int>(fb_w);
-                    height = static_cast<unsigned int>(fb_h);
-                    interopBuffer.resize(width, height);
-                    display.resize(width, height);
-                    camera.aspect = static_cast<float>(width) / static_cast<float>(height);
-                    params.image_width  = width;
-                    params.image_height = height;
-                    glViewport(0, 0, static_cast<GLsizei>(width),
-                               static_cast<GLsizei>(height));
-                }
-
-                float3 cam_U, cam_V, cam_W;
-                camera.uvw(cam_U, cam_V, cam_W);
-
-                uchar4 *d_pixels = interopBuffer.map(optixContext.stream());
-                params.image = d_pixels;
-
-                CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(d_params), &params,
-                                           sizeof(Params), cudaMemcpyHostToDevice,
-                                           optixContext.stream()));
-
-                RayGenData rgData;
-                rgData.cam_eye   = camera.eye();
-                rgData.camera_u  = cam_U;
-                rgData.camera_v  = cam_V;
-                rgData.camera_w  = cam_W;
-                pipeline.updateRayGenRecord(optixContext.stream(), rgData);
-
-                metrics.beginFrame();
-                OPTIX_CHECK(optixLaunch(pipeline.pipeline(), optixContext.stream(),
-                                        d_params, sizeof(Params), pipeline.sbt(),
-                                        width, height, 1));
-                metrics.endFrame();
-
-                interopBuffer.unmap(optixContext.stream());
-
-                display.present(interopBuffer.pbo());
-
-                window.swapBuffers();
-            }
-
-            metrics.flush();
-
-            std::cout << "\nMetrics summary (manual mode):\n"
-                      << "  frames   : " << metrics.numFramesRecorded() << "\n"
-                      << "  render ms: mean=" << metrics.meanRenderMs()
-                      << " min=" << metrics.minRenderMs()
-                      << " max=" << metrics.maxRenderMs() << "\n"
-                      << "  fps      : mean=" << metrics.meanFps()
-                      << " latest=" << metrics.latestFps() << "\n"
-                      << "  gpu mem  : " << metrics.gpuMemoryBytes()
-                      << " bytes\n";
-            if (metrics.hasLatency())
-                std::cout << "  latency  : latest=" << metrics.latestLatencyMs() << " ms\n";
-
-            CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_params)));
-            volume.destroyDevice(d_volumeArray, volumeTex);
-            if (d_tfData) cudaFree(d_tfData);
+            pipeline.reset(new PipelineBase);
+            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
+                           "__raygen__rg", "__miss__ms", "__closesthit__ch",
+                           nullptr, TraceMode::MANUAL);
         }
+
+        CUdeviceptr d_params = 0;
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params), sizeof(Params)));
+
+        metrics.recordGpuMemory();
+
+        std::cout << "Starting render loop (" << modeLabel << " mode)...\n";
+
+        runRenderLoop(window, display, interopBuffer, optixContext, *pipeline,
+                      metrics, camera, params, d_params);
+
+        printMetricsSummary(metrics, modeLabel);
+
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_params)));
+        volume.destroyDevice(d_volumeArray, volumeTex);
+        if (d_tfData) cudaFree(d_tfData);
     }
     catch (std::exception& e)
     {

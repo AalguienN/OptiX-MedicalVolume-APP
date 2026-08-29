@@ -15,6 +15,7 @@ add_executable(optix_app
     display.cpp
     placeholder_scene.cpp
     volume_scene.cpp
+    bricked_volume.cpp
     dicom_loader.cpp
     volume.cpp
     ../common/metrics.cpp
