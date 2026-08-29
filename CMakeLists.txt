@@ -9,7 +9,7 @@ set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 if(WIN32)
     set(OPTIX_ROOT_DIR_DEFAULT "C:/ProgramData/NVIDIA Corporation/OptiX SDK 9.1.0")
 else()
-    set(OPTIX_ROOT_DIR_DEFAULT "$ENV{HOME}/nvidia/Optix91")
+    set(OPTIX_ROOT_DIR_DEFAULT "$ENV{HOME}/nvidia/OptiX91")
 endif()
 
 set(OPTIX_ROOT_DIR "${OPTIX_ROOT_DIR_DEFAULT}" CACHE PATH "OptiX SDK root directory")
