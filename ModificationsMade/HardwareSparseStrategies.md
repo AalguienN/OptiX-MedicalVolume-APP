@@ -196,3 +196,88 @@ closest-hit never nest `optixTrace` calls).
 
 All strategies are DICOM-loadable from the unchanged `Volume`/`dicom_loader`
 path and render through the same GLFW window + OpenGL interop loop.
+
+## Debugging & fixes
+
+This section records the bugs found and fixed while bringing the three
+strategies to a correct, error-free first frame.
+
+### 1. Shared OptiX IR module & payload-size mismatch (total breakage)
+
+Each strategy used to set its own `numPayloadValues` (3 for the old modes). The
+three new strategies compile into the **same** single OptiX IR module as the
+baseline (`device_programs.cu` amalgamates every `.cu`), and `numPayloadValues`
+is a per-module compile option — so a region-style miss program writing payload
+slot 3 conflicted with a module reserving only 3 payload values, producing
+`OPTIX_ERROR_INVALID_PAYLOAD_ACCESS` and breaking every mode.
+
+**Fix:** `createModule()` now reserves `numPayloadValues = 4` and
+`numAttributeValues = 3` unconditionally for all modes. The region-style miss
+programs write payload slot 3; the region intersection reports a third attribute
+(primitive index). Modes that only use payload/attribute slots 0–2 are
+unaffected by the reservation.
+
+### 2. Continuation-stack overflow in the ray-loop raygen (illegal memory access)
+
+The region/octree-region raygen keeps a large live register/local frame across
+each `optixTrace` inside its utility-ray loop. The continuation-stack size
+computed by `optixUtilComputeStackSizes` was too tight, truncating a program's
+local frame (`illegal memory access`, `__local__` overflow).
+
+**Fix:** in `createPipeline()`, oversize the continuation stack
+(`css = css*2 + 4096`) before `optixPipelineSetStackSize`.
+
+### 3. Octree rendered nothing
+
+Two independent bugs:
+
+- `app_main.cpp` passed `intersectionEntry = nullptr` for the OCTREE block.
+  **Fix:** use `"__intersection__is"` (the shared single-AABB intersection).
+- Child lookup used `node.childOffset + k` directly instead of dereferencing
+  through `params.octreeChild[]`. **Fix:** read `params.octreeChild[node.childOffset + k]`.
+
+### 4. Black vertical line at the exact horizontal center (x = 960) on the first frame
+
+At startup the camera has `theta = 0`, so the exact center column's ray has
+`direction.x == 0.0f` precisely (`U = (1,0,0)`, so the center `d.x = 0` makes
+`direction.x = 0`). The shared slab `intersectAABB` computed `inv = 1/dir` and
+multiplied by it; when a sub-region face lay exactly on the ray plane this gave
+`0 * inf = NaN`, so `tmin <= tmax` was false and **every** crossed sub-region
+was rejected. Evidence: of the 8 root octree children, all failed
+`intersectAABB` for the center ray; debug showed `ct1 = -inf` and a child AABB
+with `bmax.x == origin.x`. Old modes were unaffected because they only intersect
+the single volume box, whose face never coincided with the ray plane.
+
+**Fix:** rewrote `intersectAABB` in `device/shared_device_programs.h` to handle
+each axis independently: when `|dir.axis| < 1e-12`, check `origin.axis` inside
+`[bmin.axis, bmax.axis]` (else miss) instead of dividing by zero; otherwise do
+the normal slab division. This one shared fix repaired the octree (software
+traversal) and the region/octree-region (intersection) strategies at once, since
+they all call it, and it is strictly more correct than the old slab test.
+
+### 5. Degenerate corner-grazing hits stuck the region ray-loop advance
+
+After fixing `intersectAABB`, region/octree-region still showed a mostly-black
+thumb at the exact horizontal center. Diagnosis: a ray lying exactly on a brick
+face produced a **zero-length** (`tExit == tHit`) corner-grazing intersection
+(`raw=[399.86,399.86]`), and the ray-loop advanced `t_cur` by only
+`tExit + 0.01*stepSize` — too little to escape the degenerate point, so it
+re-issued the same hit every hop and burned all 256 hops without accumulating.
+
+**Fix:** in the region/octree-region raygen loop, when the reported span is
+degenerate (`tExit - tHit <= stepSize*0.01`), advance by a full
+`stepSize` (one real sample step) instead of the tiny nudge, so the ray escapes
+the grazing point and continues to the next real brick.
+
+### Result
+
+After these fixes all 7 modes compile, run error-free, and render a correct
+first frame. `--mode octree` now matches the dense baseline essentially exactly
+(≈ 211 differing pixels out of ~1.94 M, all at sparse-structure boundaries).
+`--mode region` and `--mode octree-regions` render correctly and reproduce the
+dense image wherever their coarse (16³ brick / leaf) `maxOpacity ≥ ε` (default
+ε = 0.01) relevance test keeps a primitive; low-density tissue at margins that
+the finer octree captures is omitted by design, which is the expected trade-off
+of the hardware-skipped sparse strategies. Sparse acceleration is confirmed by
+the measured sample counts (dense ≈ 482 M/frame; region ≈ 201 M; octree ≈ 153 M;
+octree-regions ≈ 153 M).

@@ -121,7 +121,7 @@ extern "C" __global__ void __raygen__rg_region()
                    0,
                    1,
                    0,
-                   p0, p1, p2, missFlag);
+                    p0, p1, p2, missFlag);
 
         if (missFlag == 1u)   // miss: no more non-empty bricks along the ray
             break;
@@ -130,16 +130,23 @@ extern "C" __global__ void __raygen__rg_region()
         float tExit  = __uint_as_float(p1);
 
         if (tHit >= 1e29f)
-            break;  // safety
+            break;
 
         regionMarchSeed(origin, direction, tHit, tExit, stepSize,
                         accumR, accumG, accumB, accumA);
 
-        t_cur = fminf(tExit + stepSize * 0.01f, 1e30f);
-
-        // Avoid an infinite loop if tExit did not advance (defensive).
-        if (tHit <= 0.0f && tExit <= tHit)
-            break;
+        // Advance past this hit. For a legitimate non-empty brick the exit t is
+        // well beyond the entry, and a tiny nudge past the exit is enough. But a
+        // ray lying exactly on a brick face can produce a degenerate corner-
+        // grazing hit whose entry/exit are identical (zero-length span); the tiny
+        // nudge would then loop forever on that single point. In that case force
+        // a full sample-step advance so the ray escapes and continues to the next
+        // real brick (same robustness as the shared intersectAABB zero-direction
+        // fix used by the octree traversal).
+        float advance = tExit + stepSize * 0.01f;
+        if (tExit - tHit <= stepSize * 0.01f)
+            advance = tExit + stepSize;
+        t_cur = fminf(advance, 1e30f);
     }
 
     float3 color = make_float3(accumR, accumG, accumB);

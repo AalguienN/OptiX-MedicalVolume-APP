@@ -77,7 +77,10 @@ extern "C" __global__ void __raygen__rg_region_octree()
         regionMarchSeed(origin, direction, tHit, tExit, stepSize,
                         accumR, accumG, accumB, accumA);
 
-        t_cur = fminf(tExit + stepSize * 0.01f, 1e30f);
+        float advance = tExit + stepSize * 0.01f;
+        if (tExit - tHit <= stepSize * 0.01f)
+            advance = tExit + stepSize;
+        t_cur = fminf(advance, 1e30f);
 
         if (tHit <= 0.0f && tExit <= tHit)
             break;

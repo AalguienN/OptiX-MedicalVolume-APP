@@ -33,15 +33,55 @@ static __forceinline__ __device__ bool intersectAABB(
     float3 bmin, float3 bmax,
     float& tmin, float& tmax)
 {
-    float3 inv_dir = make_float3(1.0f / direction.x, 1.0f / direction.y, 1.0f / direction.z);
-    float3 t0 = componentMul(bmin - origin, inv_dir);
-    float3 t1 = componentMul(bmax - origin, inv_dir);
+    // Robust per-axis slab test. Handles rays whose direction component is
+    // exactly 0 (e.g. a camera perfectly aligned with an axis): in that case
+    // the ray's coordinate must lie within the slab on that axis, otherwise it
+    // never enters the box. A plain 1/d slab test would compute 0 * inf = NaN
+    // when the ray's coordinate equals a box face, wrongly rejecting the hit.
+    tmin = -3.402823466e+38f;   // -FLT_MAX
+    tmax =  3.402823466e+38f;   // +FLT_MAX
 
-    float3 tmin3 = make_float3(fminf(t0.x, t1.x), fminf(t0.y, t1.y), fminf(t0.z, t1.z));
-    float3 tmax3 = make_float3(fmaxf(t0.x, t1.x), fmaxf(t0.y, t1.y), fmaxf(t0.z, t1.z));
+    if (fabsf(direction.x) < 1e-12f)
+    {
+        if (origin.x < bmin.x || origin.x > bmax.x) return false;
+    }
+    else
+    {
+        float inv = 1.0f / direction.x;
+        float t0 = (bmin.x - origin.x) * inv;
+        float t1 = (bmax.x - origin.x) * inv;
+        if (t0 > t1) { float tmp = t0; t0 = t1; t1 = tmp; }
+        tmin = fmaxf(tmin, t0);
+        tmax = fminf(tmax, t1);
+    }
 
-    tmin = fmaxf(fmaxf(tmin3.x, tmin3.y), tmin3.z);
-    tmax = fminf(fminf(tmax3.x, tmax3.y), tmax3.z);
+    if (fabsf(direction.y) < 1e-12f)
+    {
+        if (origin.y < bmin.y || origin.y > bmax.y) return false;
+    }
+    else
+    {
+        float inv = 1.0f / direction.y;
+        float t0 = (bmin.y - origin.y) * inv;
+        float t1 = (bmax.y - origin.y) * inv;
+        if (t0 > t1) { float tmp = t0; t0 = t1; t1 = tmp; }
+        tmin = fmaxf(tmin, t0);
+        tmax = fminf(tmax, t1);
+    }
+
+    if (fabsf(direction.z) < 1e-12f)
+    {
+        if (origin.z < bmin.z || origin.z > bmax.z) return false;
+    }
+    else
+    {
+        float inv = 1.0f / direction.z;
+        float t0 = (bmin.z - origin.z) * inv;
+        float t1 = (bmax.z - origin.z) * inv;
+        if (t0 > t1) { float tmp = t0; t0 = t1; t1 = tmp; }
+        tmin = fmaxf(tmin, t0);
+        tmax = fminf(tmax, t1);
+    }
 
     return tmin <= tmax && tmax > 0.0f;
 }
