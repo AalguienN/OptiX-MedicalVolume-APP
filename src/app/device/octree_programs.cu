@@ -11,8 +11,10 @@
 // intersection program reports the volume entry/exit t-values and the
 // closest-hit program octreeTraverse() walks the octree over that span.
 // Traversal is iterative with an explicit stack (bounded by octree depth x 8)
-// to avoid device-stack recursion. Within a relevant leaf the dense grid is
-// sampled on the same fixed step grid as the baseline, so the output is
+// to avoid device-stack recursion. Within a relevant leaf the shared
+// regionMarch() is used (see adaptive_programs.cu): the dense grid is sampled
+// on the same step grid as the baseline (fixed step by default, or with the
+// adaptive empty-space leap when --adaptive-march is on), so the output is
 // visually identical to the dense baseline.
 ///////////////////////////////////////////////////////////////////////////////
 #include "shared_device_programs.h"
@@ -47,61 +49,6 @@ __forceinline__ __device__ void octreeNodeWorldBounds(
         static_cast<float>(node.voxelMax[2]) * params.volumeSpacing.z);
 }
 
-// March the span [tmin,tmax] with the dense-baseline fixed step size,
-// continuing from an existing accumulated RGBA (front-to-back compositing,
-// early termination, same transfer function as the baseline).
-__forceinline__ __device__ void marchLeafRegion(
-    float3 origin, float3 direction, float tmin, float tmax, float stepSize,
-    float& accumR, float& accumG, float& accumB, float& accumA)
-{
-    float3 volumeSize = make_float3(
-        params.volumeDims.x * params.volumeSpacing.x,
-        params.volumeDims.y * params.volumeSpacing.y,
-        params.volumeDims.z * params.volumeSpacing.z);
-
-    unsigned int nSamples = 0;
-
-    int maxSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
-    if (maxSteps > 4096) maxSteps = 4096;
-
-    for (int i = 0; i < maxSteps && accumA < 0.99f; ++i)
-    {
-        float t = tmin + i * stepSize;
-        float3 samplePos = origin + direction * t;
-        float3 texCoord = componentDiv(samplePos - params.volumeOrigin, volumeSize);
-
-        texCoord.x = fmaxf(0.0f, fminf(1.0f, texCoord.x));
-        texCoord.y = fmaxf(0.0f, fminf(1.0f, texCoord.y));
-        texCoord.z = fmaxf(0.0f, fminf(1.0f, texCoord.z));
-
-        float scalar = tex3D<float>(params.volumeTex,
-                                    texCoord.x, texCoord.y, texCoord.z);
-        ++nSamples;
-
-        float tf_t = (scalar - params.scalarMin) / (params.scalarMax - params.scalarMin) * 2047.0f;
-        int tfIdx = __float2int_rn(tf_t);
-        tfIdx = max(0, min(2047, tfIdx));
-        float4 tfVal = params.tfData[tfIdx];
-
-        float r = tfVal.x;
-        float g = tfVal.y;
-        float b = tfVal.z;
-        float a = tfVal.w * stepSize;
-
-        if (a > 0.001f)
-        {
-            float opacityFactor = (1.0f - accumA) * a;
-            accumR += opacityFactor * r;
-            accumG += opacityFactor * g;
-            accumB += opacityFactor * b;
-            accumA += opacityFactor;
-        }
-    }
-
-    if (params.dbgCounters)
-        atomicAdd(&params.dbgCounters[0], nSamples);
-}
-
 }  // namespace
 
 // Iterative front-to-back octree traversal over [tmin,tmax].
@@ -133,8 +80,11 @@ static __forceinline__ __device__ float3 octreeTraverse(
 
         if (node.isLeaf)
         {
-            marchLeafRegion(origin, direction, cur.t0, cur.t1, stepSize,
-                            accumR, accumG, accumB, accumA);
+            // Shared intra-region march (adaptive-step when params.useAdaptive
+            // is set, fixed dense-baseline step otherwise) over this leaf's
+            // span, continuing the accumulated RGBA.
+            regionMarch(origin, direction, cur.t0, cur.t1, stepSize,
+                        accumR, accumG, accumB, accumA);
             continue;
         }
 

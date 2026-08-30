@@ -18,60 +18,11 @@
 ///////////////////////////////////////////////////////////////////////////////
 #include "shared_device_programs.h"
 
-// March the span [tmin,tmax] with the dense-baseline fixed step size,
-// continuing from an existing accumulated RGBA so multiple bricks on one ray
-// composite correctly. Mirrors shared_device_programs.h volumeMarch().
-static __forceinline__ __device__ void regionMarchSeed(
-    float3 origin, float3 direction, float tmin, float tmax,
-    float stepSize, float& accumR, float& accumG, float& accumB, float& accumA)
-{
-    float3 volumeSize = make_float3(
-        params.volumeDims.x * params.volumeSpacing.x,
-        params.volumeDims.y * params.volumeSpacing.y,
-        params.volumeDims.z * params.volumeSpacing.z);
-
-    unsigned int nSamples = 0;
-
-    int maxSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
-    if (maxSteps > 4096) maxSteps = 4096;
-
-    for (int i = 0; i < maxSteps && accumA < 0.99f; ++i)
-    {
-        float t = tmin + i * stepSize;
-        float3 samplePos = origin + direction * t;
-        float3 texCoord = componentDiv(samplePos - params.volumeOrigin, volumeSize);
-
-        texCoord.x = fmaxf(0.0f, fminf(1.0f, texCoord.x));
-        texCoord.y = fmaxf(0.0f, fminf(1.0f, texCoord.y));
-        texCoord.z = fmaxf(0.0f, fminf(1.0f, texCoord.z));
-
-        float scalar = tex3D<float>(params.volumeTex,
-                                    texCoord.x, texCoord.y, texCoord.z);
-        ++nSamples;
-
-        float tf_t = (scalar - params.scalarMin) / (params.scalarMax - params.scalarMin) * 2047.0f;
-        int tfIdx = __float2int_rn(tf_t);
-        tfIdx = max(0, min(2047, tfIdx));
-        float4 tfVal = params.tfData[tfIdx];
-
-        float r = tfVal.x;
-        float g = tfVal.y;
-        float b = tfVal.z;
-        float a = tfVal.w * stepSize;
-
-        if (a > 0.001f)
-        {
-            float opacityFactor = (1.0f - accumA) * a;
-            accumR += opacityFactor * r;
-            accumG += opacityFactor * g;
-            accumB += opacityFactor * b;
-            accumA += opacityFactor;
-        }
-    }
-
-    if (params.dbgCounters)
-        atomicAdd(&params.dbgCounters[0], nSamples);
-}
+// regionMarch (defined in adaptive_programs.cu, same translation unit) marches
+// the span [tmin,tmax] continuing from the accumulated RGBA. It is the shared
+// intra-region traversal: the adaptive-step variant when params.useAdaptive is
+// set (--adaptive-march on, default) and the dense-baseline fixed-step variant
+// otherwise.
 
 // ============================================================
 // Ray-generation program: utility-ray loop over non-empty bricks.
@@ -133,8 +84,8 @@ extern "C" __global__ void __raygen__rg_bricked_regions()
         if (tHit >= 1e29f)
             break;
 
-        regionMarchSeed(origin, direction, tHit, tExit, stepSize,
-                        accumR, accumG, accumB, accumA);
+        regionMarch(origin, direction, tHit, tExit, stepSize,
+                    accumR, accumG, accumB, accumA);
 
         // Advance past this hit. For a legitimate non-empty brick the exit t is
         // well beyond the entry, and a tiny nudge past the exit is enough. But a

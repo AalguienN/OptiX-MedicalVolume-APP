@@ -84,10 +84,14 @@ void printUsage(const char* prog) {
                << "                     RT cores skip empty space with data-adaptive granularity\n"
                << "  --mode nanovdb     NanoVDB: sparse GPU volume tree (NanoVDB) with built-in\n"
                << "                     empty-space skipping, sampled via the device accessor\n"
-               << "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked-regions\n"
+<< "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked-regions\n"
                << "                     (default 16)\n"
-               << "  --epsilon <f>      Opacity threshold classifying a brick/voxel as rendering-\n"
-<< "                     relevant for --mode bricked-regions / adaptive / nanovdb (default 0.01)\n"
+               << "  --epsilon <f>      Opacity threshold classifying a voxel as rendering-\n"
+               << "                     relevant for --mode bricked-regions / adaptive / nanovdb /\n"
+               << "                     octree / octree-regions (default 0.01)\n"
+               << "  --adaptive-march <on|off>  Use the adaptive-step (Chebyshev distance map)\n"
+               << "                     inner march for the octree / bricked-regions /\n"
+               << "                     octree-regions strategies (default on)\n"
                << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
                << "  --window <n>       FPS observation window in frames (default 120)\n"
                << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n"
@@ -219,8 +223,9 @@ int main(int argc, char** argv)
     int brickSize = 16;
     float brickEpsilon = 0.01f;
     int octreeLeafSize = 8;
-    unsigned int maxFrames = 0;   // 0 = run until window closes
-    bool nanovdbNearest = false;  // 1 = nearest, 0 = trilinear (NanoVDB, default)
+    unsigned int maxFrames = 0;     // 0 = run until window closes
+    bool nanovdbNearest = false;    // 1 = nearest, 0 = trilinear (NanoVDB, default)
+    bool adaptiveMarch = true;      // adaptive-step inner march in region strategies
 
     for (int i = 2; i < argc; ++i)
     {
@@ -291,6 +296,21 @@ int main(int argc, char** argv)
                 return 1;
             }
         }
+        else if (std::strcmp(argv[i], "--adaptive-march") == 0 && i + 1 < argc)
+        {
+            const std::string v = argv[++i];
+            if (v == "on")
+                adaptiveMarch = true;
+            else if (v == "off")
+                adaptiveMarch = false;
+            else
+            {
+                std::cerr << "Unknown adaptive-march value: " << v
+                          << " (expected 'on' or 'off')\n";
+                printUsage(argv[0]);
+                return 1;
+            }
+        }
         else
         {
             std::cerr << "Unknown argument: " << argv[i] << "\n";
@@ -315,6 +335,9 @@ int main(int argc, char** argv)
                       << brickEpsilon << "\n";
         if (traceMode == TraceMode::ADAPTIVE)
             std::cout << "Adaptive-step distance map, epsilon=" << brickEpsilon << "\n";
+        if (traceMode == TraceMode::OCTREE || traceMode == TraceMode::BRICKED_REGIONS ||
+            traceMode == TraceMode::OCTREE_REGIONS)
+            std::cout << "Adaptive inner march: " << (adaptiveMarch ? "on" : "off") << "\n";
         std::cout << "Loading DICOM series from: " << seriesPath << "\n";
         DicomSeries series = loadDicomSeries(seriesPath);
 
@@ -459,6 +482,26 @@ int main(int argc, char** argv)
         params.scalarMin     = scalarMin;
         params.scalarMax     = scalarMax;
 
+        // Builds and uploads the Chebyshev distance map for the strategies
+        // whose intra-region march uses it (octree / bricked-regions /
+        // octree-regions) and enables the adaptive-step gate. Only runs when
+        // --adaptive-march is on; otherwise the shared region march keeps the
+        // dense-baseline fixed step.
+        auto enableAdaptiveStep = [&]()
+        {
+            if (!adaptiveMarch)
+                return;
+            adaptiveGrid.reset(new AdaptiveGridMarcher);
+            adaptiveGrid->build(volume, tf, scalarMin, scalarMax, brickEpsilon);
+            params.distanceTex = adaptiveGrid->distanceTex();
+            params.epsilon     = brickEpsilon;
+            params.useAdaptive = 1u;
+            std::cout << "Distance map: " << adaptiveGrid->dims().x << "x"
+                      << adaptiveGrid->dims().y << "x" << adaptiveGrid->dims().z
+                      << ", " << adaptiveGrid->distanceBytes() / (1024.0 * 1024.0)
+                      << " MB\n";
+        };
+
         if (traceMode == TraceMode::OPTIX)
         {
             volScene.reset(new VolumeScene);
@@ -487,6 +530,7 @@ int main(int argc, char** argv)
             adaptiveGrid->build(volume, tf, scalarMin, scalarMax, brickEpsilon);
             params.distanceTex = adaptiveGrid->distanceTex();
             params.epsilon     = brickEpsilon;
+            params.useAdaptive = 1u;
 
             std::cout << "Distance map: " << adaptiveGrid->dims().x << "x"
                       << adaptiveGrid->dims().y << "x" << adaptiveGrid->dims().z
@@ -510,6 +554,8 @@ int main(int argc, char** argv)
                                       volume, tf, brickSize, scalarMin, scalarMax, brickEpsilon);
             params.handle               = brickedRegionsScene->handle();
             params.brickedRegionsAabbs  = brickedRegionsScene->deviceAabbs();
+
+            enableAdaptiveStep();
 
             pipeline.reset(new PipelineBase);
             pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
@@ -535,6 +581,8 @@ int main(int argc, char** argv)
             params.octreeChild    = octreeVol->deviceChild();
             params.octreeNodeCount = static_cast<unsigned int>(octreeVol->numNodes());
 
+            enableAdaptiveStep();
+
             std::cout << "Octree: " << octreeVol->numNodes() << " nodes, "
                       << octreeVol->nodeBytes() / (1024.0 * 1024.0) << " MB, "
                       << octreeVol->numLeaves() << " leaves, "
@@ -558,6 +606,8 @@ int main(int argc, char** argv)
             params.handle        = ocRegionsScene->handle();
             params.ocRegionAabbs = ocRegionsScene->deviceAabbs();
             params.ocRegionNode  = ocRegionsScene->deviceNodeMap();
+
+            enableAdaptiveStep();
 
             std::cout << "Octree-regions scene: " << ocRegionsScene->numRegions()
                       << " leaf primitives\n";

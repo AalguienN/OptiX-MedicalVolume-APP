@@ -15,9 +15,10 @@
 ///////////////////////////////////////////////////////////////////////////////
 #include "shared_device_programs.h"
 
-// regionMarchSeed (defined in bricked_regions_programs.cu, same translation
-// unit) marches the span [tmin,tmax] with the fixed dense-baseline step,
-// continuing from the accumulated RGBA. It is reused verbatim here.
+// regionMarch (defined in adaptive_programs.cu, same translation unit) marches
+// the span [tmin,tmax] with the shared intra-region march: adaptive-step when
+// params.useAdaptive is set, dense-baseline fixed step otherwise. It is reused
+// verbatim here.
 
 // ============================================================
 // Ray-generation program: utility-ray loop over non-empty octree leaves.
@@ -75,8 +76,8 @@ extern "C" __global__ void __raygen__rg_region_octree()
         if (tHit >= 1e29f)
             break;
 
-        regionMarchSeed(origin, direction, tHit, tExit, stepSize,
-                        accumR, accumG, accumB, accumA);
+        regionMarch(origin, direction, tHit, tExit, stepSize,
+                    accumR, accumG, accumB, accumA);
 
         float advance = tExit + stepSize * 0.01f;
         if (tExit - tHit <= stepSize * 0.01f)

@@ -34,13 +34,17 @@ struct Params
     float                  scalarMin;
     float                  scalarMax;
 
-    // Adaptive-step strategy fields (host sets them only for TraceMode::ADAPTIVE).
-    // distanceTex is a 3D texture holding the per-voxel Chebyshev distance (in
-    // voxel units) to the nearest rendering-relevant (non-empty) voxel.
-    // epsilon is the opacity threshold that defines a voxel as rendering-relevant,
-    // matching the threshold used to build the distance map / occupancy.
+    // Adaptive-step fields. distanceTex is a 3D texture holding the per-voxel
+    // Chebyshev distance (in voxel units) to the nearest rendering-relevant
+    // (non-empty) voxel; epsilon is the opacity threshold that defines a voxel
+    // as rendering-relevant, matching the threshold used to build the distance
+    // map / occupancy. Host sets these for TraceMode::ADAPTIVE and, when
+    // --adaptive-march is on, for the octree / bricked-regions / octree-regions
+    // modes. useAdaptive gates the shared intra-region march: 1 selects the
+    // adaptive-step variant, 0 the fixed dense-baseline step.
     cudaTextureObject_t    distanceTex;
     float                  epsilon;
+    unsigned int           useAdaptive;
 
     // Bricked-regions strategy fields (host sets them only for
     // TraceMode::BRICKED_REGIONS). regionAabbs is the per-primitive AABB array
