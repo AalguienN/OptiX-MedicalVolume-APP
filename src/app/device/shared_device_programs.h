@@ -57,6 +57,7 @@ static __forceinline__ __device__ float3 volumeMarch(float3 origin, float3 direc
                    fminf(params.volumeSpacing.y, params.volumeSpacing.z)) * 0.5f;
 
     float accumR = 0.0f, accumG = 0.0f, accumB = 0.0f, accumA = 0.0f;
+    unsigned int nSamples = 0;
 
     int maxSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
     if (maxSteps > 4096) maxSteps = 4096;
@@ -73,6 +74,7 @@ static __forceinline__ __device__ float3 volumeMarch(float3 origin, float3 direc
 
         float scalar = tex3D<float>(params.volumeTex,
                                     texCoord.x, texCoord.y, texCoord.z);
+        ++nSamples;
 
         float tf_t = (scalar - params.scalarMin) / (params.scalarMax - params.scalarMin) * 2047.0f;
         int tfIdx = __float2int_rn(tf_t);
@@ -93,6 +95,9 @@ static __forceinline__ __device__ float3 volumeMarch(float3 origin, float3 direc
             accumA += opacityFactor;
         }
     }
+
+    if (params.dbgCounters)
+        atomicAdd(&params.dbgCounters[0], nSamples);
 
     return make_float3(accumR, accumG, accumB);
 }

@@ -40,13 +40,18 @@ struct Params
     int3                   brickCount;     // bricks per axis (ceil)
     float3                 brickSize;      // world-space extent per brick
 
-    // Adaptive-step strategy fields (host sets them only for
-    // TraceMode::ADAPTIVE). distanceTex is a 3D texture holding the per-voxel
-    // Chebyshev distance (in voxel units) to the nearest rendering-relevant
-    // (non-empty) voxel. minSpacing is the smallest voxel spacing, used to
-    // convert the distance-map voxel value into a safe world-space advance.
+    // Adaptive-step strategy fields (host sets them only for TraceMode::ADAPTIVE).
+    // distanceTex is a 3D texture holding the per-voxel Chebyshev distance (in
+    // voxel units) to the nearest rendering-relevant (non-empty) voxel.
+    // epsilon is the opacity threshold that defines a voxel as rendering-relevant,
+    // matching the threshold used to build the distance map / occupancy.
     cudaTextureObject_t    distanceTex;
-    float                  minSpacing;
+    float                  epsilon;
+
+    // Optional per-frame diagnostic counters (device, 3 x unsigned int):
+    // [0] = volume samples, [1] = distance-map reads, [2] = leaps. Null to
+    // disable. Only incremented by the manual marchers for performance analysis.
+    unsigned int*          dbgCounters;
 };
 
 struct RayGenData

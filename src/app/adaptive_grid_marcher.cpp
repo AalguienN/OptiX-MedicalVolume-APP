@@ -131,6 +131,16 @@ void AdaptiveGridMarcher::build(const Volume& volume, const TransferFunction& tf
         }
         std::cout << "Adaptive occupancy: " << (relevant * 100.0 / total) << "% relevant, "
                   << "max Chebyshev distance " << maxD << " voxels\n";
+
+        unsigned long long d2 = 0, d10 = 0;
+        for (size_t i = 0; i < total; ++i)
+        {
+            const unsigned char d = dist_[i];
+            if (d >= 2) ++d2;
+            if (d >= 10) ++d10;
+        }
+        std::cout << "Distance distribution: " << (d2 * 100.0 / total) << "% voxels D>=2, "
+                  << (d10 * 100.0 / total) << "% voxels D>=10\n";
     }
 
     uploadToDevice();
@@ -170,8 +180,11 @@ void AdaptiveGridMarcher::uploadToDevice()
     // interpolation across an occupied boundary could shrink the value and,
     // more importantly, reading the value of the nearest voxel keeps the
     // (D-1) leap strictly within the guaranteed-empty region.
+    // NOTE: the channel is unsigned char, so it must be read in normalized
+    // float mode (value/255) and rescaled by 255 on the device; reading a
+    // uchar texture with cudaReadModeElementType returns garbage via tex3D.
     texDesc.filterMode     = cudaFilterModePoint;
-    texDesc.readMode       = cudaReadModeElementType;
+    texDesc.readMode       = cudaReadModeNormalizedFloat;
     texDesc.normalizedCoords = 1;
 
     CUDA_CHECK(cudaCreateTextureObject(&d_distanceTex_, &resDesc, &texDesc, nullptr));

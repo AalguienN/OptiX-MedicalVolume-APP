@@ -14,6 +14,13 @@ function(add_optix_ir_target output_var source_file)
         list(APPEND _extra_includes "-I${_dir}")
     endforeach()
 
+    # Also rebuild when any sibling .cu, .h or .hpp in the source directory
+    # changes. The app's device programs are #included from a single entry .cu
+    # (so all strategy programs and their shared headers land in one OptiX IR
+    # module), and those included files must trigger a recompile here.
+    get_filename_component(_src_dir "${source_file}" DIRECTORY)
+    file(GLOB _device_deps "${_src_dir}/*.cu" "${_src_dir}/*.h" "${_src_dir}/*.hpp")
+
     add_custom_command(
         OUTPUT "${_output}"
         COMMAND ${CUDA_NVCC_EXECUTABLE}
@@ -23,7 +30,7 @@ function(add_optix_ir_target output_var source_file)
             ${_extra_includes}
             -o "${_output}"
             "${source_file}"
-        DEPENDS "${source_file}"
+        DEPENDS "${source_file}" ${_device_deps}
         COMMENT "Compiling ${source_file} to OptiX IR"
     )
 endfunction()

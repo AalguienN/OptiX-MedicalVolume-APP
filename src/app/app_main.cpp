@@ -78,7 +78,8 @@ void printUsage(const char* prog) {
               << "  --epsilon <f>      Opacity threshold classifying a brick/voxel as rendering-\n"
               << "                     relevant for --mode bricked / adaptive (default 0.01)\n"
               << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
-              << "  --window <n>       FPS observation window in frames (default 120)\n";
+              << "  --window <n>       FPS observation window in frames (default 120)\n"
+              << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n";
 }
 
 // Shared per-frame render loop. The Params struct is wired once before this
@@ -87,10 +88,12 @@ void printUsage(const char* prog) {
 void runRenderLoop(GlWindow& window, Display& display, InteropBuffer& interopBuffer,
                    OptixContext& optixContext, PipelineBase& pipeline,
                    MetricsCollector& metrics, Camera& camera,
-                   Params& params, CUdeviceptr d_params)
+                   Params& params, CUdeviceptr d_params, unsigned int maxFrames)
 {
-    while (!window.shouldClose())
+    unsigned int frame = 0;
+    while (!window.shouldClose() && (maxFrames == 0 || frame < maxFrames))
     {
+        ++frame;
         glfwPollEvents();
 
         int fb_w, fb_h;
@@ -171,6 +174,7 @@ int main(int argc, char** argv)
     unsigned int metricsWindow = 120;
     int brickSize = 16;
     float brickEpsilon = 0.01f;
+    unsigned int maxFrames = 0;   // 0 = run until window closes
 
     for (int i = 2; i < argc; ++i)
     {
@@ -207,6 +211,10 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--window") == 0 && i + 1 < argc)
         {
             metricsWindow = static_cast<unsigned int>(std::strtoul(argv[++i], nullptr, 10));
+        }
+        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
+        {
+            maxFrames = static_cast<unsigned int>(std::strtoul(argv[++i], nullptr, 10));
         }
         else
         {
@@ -369,8 +377,6 @@ int main(int argc, char** argv)
         params.volumeMax     = make_float3(volume.maxX(), volume.maxY(), volume.maxZ());
         params.scalarMin     = scalarMin;
         params.scalarMax     = scalarMax;
-        params.minSpacing    = fminf(volume.spacingX,
-                               fminf(volume.spacingY, volume.spacingZ));
 
         if (traceMode == TraceMode::OPTIX)
         {
@@ -425,6 +431,7 @@ int main(int argc, char** argv)
             adaptiveGrid.reset(new AdaptiveGridMarcher);
             adaptiveGrid->build(volume, tf, scalarMin, scalarMax, brickEpsilon);
             params.distanceTex = adaptiveGrid->distanceTex();
+            params.epsilon     = brickEpsilon;
 
             std::cout << "Distance map: " << adaptiveGrid->dims().x << "x"
                       << adaptiveGrid->dims().y << "x" << adaptiveGrid->dims().z
@@ -451,14 +458,35 @@ int main(int argc, char** argv)
         CUdeviceptr d_params = 0;
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params), sizeof(Params)));
 
+        // Diagnostic sample counters (volume samples, distance-map reads,
+        // leaps) so the traversal cost of each strategy can be compared.
+        unsigned int* d_dbgCounters = nullptr;
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_dbgCounters), sizeof(unsigned int) * 3));
+        CUDA_CHECK(cudaMemset(d_dbgCounters, 0, sizeof(unsigned int) * 3));
+        params.dbgCounters = d_dbgCounters;
+
         metrics.recordGpuMemory();
 
         std::cout << "Starting render loop (" << modeLabel << " mode)...\n";
 
         runRenderLoop(window, display, interopBuffer, optixContext, *pipeline,
-                      metrics, camera, params, d_params);
+                      metrics, camera, params, d_params, maxFrames);
 
         printMetricsSummary(metrics, modeLabel);
+
+        {
+            unsigned int dbg[3] = { 0, 0, 0 };
+            CUDA_CHECK(cudaMemcpy(dbg, d_dbgCounters, sizeof(unsigned int) * 3,
+                                  cudaMemcpyDeviceToHost));
+            unsigned int nFrames = metrics.numFramesRecorded();
+            std::cout << "  traversal : " << dbg[0] << " vol-samples, " << dbg[1]
+                      << " dist-reads, " << dbg[2] << " leaps over " << nFrames
+                      << " frames (per frame: " << (nFrames ? dbg[0] / nFrames : 0)
+                      << " samples, " << (nFrames ? dbg[1] / nFrames : 0)
+                      << " reads, " << (nFrames ? dbg[2] / nFrames : 0)
+                      << " leaps)\n";
+        }
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_dbgCounters)));
 
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_params)));
         volume.destroyDevice(d_volumeArray, volumeTex);
