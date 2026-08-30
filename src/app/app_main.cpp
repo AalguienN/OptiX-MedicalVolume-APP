@@ -91,7 +91,7 @@ void printUsage(const char* prog) {
                << "                     octree / octree-regions (default 0.01)\n"
                << "  --adaptive-march <on|off>  Use the adaptive-step (Chebyshev distance map)\n"
                << "                     inner march for the octree / bricked-regions /\n"
-               << "                     octree-regions strategies (default on)\n"
+               << "                     octree-regions strategies (default off)\n"
                << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
                << "  --window <n>       FPS observation window in frames (default 120)\n"
                << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n"
@@ -225,7 +225,7 @@ int main(int argc, char** argv)
     int octreeLeafSize = 8;
     unsigned int maxFrames = 0;     // 0 = run until window closes
     bool nanovdbNearest = false;    // 1 = nearest, 0 = trilinear (NanoVDB, default)
-    bool adaptiveMarch = true;      // adaptive-step inner march in region strategies
+    bool adaptiveMarch = false;     // adaptive-step inner march in region strategies
 
     for (int i = 2; i < argc; ++i)
     {

@@ -189,7 +189,7 @@ static __forceinline__ __device__ void spanMarchAdaptive(
 // Gated seedable span march: the shared intra-region traversal used by the
 // octree / bricked-regions / octree-regions strategies. Dispatches to the
 // adaptive- or fixed-step variant depending on params.useAdaptive (host sets
-// it from --adaptive-march, default on).
+// it from --adaptive-march, default off (dense-baseline fixed step).
 static __forceinline__ __device__ void regionMarch(
     float3 origin, float3 direction, float tmin, float tmax, float stepSize,
     float& accumR, float& accumG, float& accumB, float& accumA)
