@@ -144,3 +144,6 @@ extern "C" __global__ void __closesthit__ch()
 // the same OptiX IR module (single OptixModule) that the pipeline loads.
 #include "brick_programs.cu"
 #include "adaptive_programs.cu"
+#include "region_programs.cu"
+#include "octree_programs.cu"
+#include "octree_region_programs.cu"

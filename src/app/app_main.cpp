@@ -11,6 +11,9 @@
 #include "optix_context.h"
 #include "pipeline_base.h"
 #include "placeholder_scene.h"
+#include "regions_scene.h"
+#include "octree_volume.h"
+#include "octree_regions_scene.h"
 #include "shared_device.h"
 #include "transfer_function.h"
 #include "volume.h"
@@ -74,6 +77,12 @@ void printUsage(const char* prog) {
               << "                     n^3 voxels and skips empty bricks during traversal\n"
               << "  --mode adaptive    Adaptive-step grid marcher: Chebyshev distance map drives\n"
               << "                     the ray-march step size (software, no RT-core traversal)\n"
+              << "  --mode region      Region strategy: one GAS AABB per non-empty brick; RT cores\n"
+              << "                     skip empty space in hardware\n"
+              << "  --mode octree      SVO / Octree: hierarchical octree empty-subtree skipping\n"
+              << "                     (software traversal, single top-level AABB)\n"
+              << "  --mode octree-regions  Octree regions: octree leaves emitted as GAS AABBs so\n"
+              << "                     RT cores skip empty space with data-adaptive granularity\n"
               << "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked (default 16)\n"
               << "  --epsilon <f>      Opacity threshold classifying a brick/voxel as rendering-\n"
               << "                     relevant for --mode bricked / adaptive (default 0.01)\n"
@@ -174,6 +183,7 @@ int main(int argc, char** argv)
     unsigned int metricsWindow = 120;
     int brickSize = 16;
     float brickEpsilon = 0.01f;
+    int octreeLeafSize = 8;
     unsigned int maxFrames = 0;   // 0 = run until window closes
 
     for (int i = 2; i < argc; ++i)
@@ -189,6 +199,12 @@ int main(int argc, char** argv)
                 traceMode = TraceMode::BRICKED;
             else if (std::strcmp(argv[i], "adaptive") == 0)
                 traceMode = TraceMode::ADAPTIVE;
+            else if (std::strcmp(argv[i], "region") == 0)
+                traceMode = TraceMode::REGION;
+            else if (std::strcmp(argv[i], "octree") == 0)
+                traceMode = TraceMode::OCTREE;
+            else if (std::strcmp(argv[i], "octree-regions") == 0)
+                traceMode = TraceMode::OCTREE_REGIONS;
             else
             {
                 std::cerr << "Unknown mode: " << argv[i] << "\n";
@@ -203,6 +219,10 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--epsilon") == 0 && i + 1 < argc)
         {
             brickEpsilon = std::strtof(argv[++i], nullptr);
+        }
+        else if (std::strcmp(argv[i], "--leaf-size") == 0 && i + 1 < argc)
+        {
+            octreeLeafSize = std::max(1, std::atoi(argv[++i]));
         }
         else if (std::strcmp(argv[i], "--metrics") == 0 && i + 1 < argc)
         {
@@ -227,7 +247,10 @@ int main(int argc, char** argv)
     const char* modeLabel =
         (traceMode == TraceMode::OPTIX)    ? "optix"    :
         (traceMode == TraceMode::BRICKED)  ? "bricked"  :
-        (traceMode == TraceMode::ADAPTIVE) ? "adaptive" : "manual";
+        (traceMode == TraceMode::ADAPTIVE) ? "adaptive" :
+        (traceMode == TraceMode::REGION)   ? "region"   :
+        (traceMode == TraceMode::OCTREE)   ? "octree"   :
+        (traceMode == TraceMode::OCTREE_REGIONS) ? "octree-regions" : "manual";
 
     try
     {
@@ -364,6 +387,9 @@ int main(int argc, char** argv)
         std::unique_ptr<PlaceholderScene> placeScene;
         std::unique_ptr<BrickedVolume> brickVol;
         std::unique_ptr<AdaptiveGridMarcher> adaptiveGrid;
+        std::unique_ptr<RegionsScene> regionsScene;
+        std::unique_ptr<OctreeVolume> octreeVol;
+        std::unique_ptr<OctreeRegionsScene> ocRegionsScene;
         std::unique_ptr<PipelineBase> pipeline;
 
         Params params = {};
@@ -442,6 +468,74 @@ int main(int argc, char** argv)
             pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
                            "__raygen__rg_adaptive", "__miss__ms", "__closesthit__ch",
                            nullptr, TraceMode::ADAPTIVE);
+        }
+        else if (traceMode == TraceMode::REGION)
+        {
+            // One AABB primitive per non-empty brick. RT-core BVH traversal
+            // skips empty space; the raygen loops with a utility ray (depth 1)
+            // over the bricks a ray actually crosses, so numPayloadValues=4
+            // (entry/exit/prim + miss flag) and the region-specific miss program.
+            regionsScene.reset(new RegionsScene);
+            regionsScene->init(optixContext.context(), optixContext.stream(),
+                               volume, tf, brickSize, scalarMin, scalarMax, brickEpsilon);
+            params.handle      = regionsScene->handle();
+            params.regionAabbs = regionsScene->deviceAabbs();
+
+            pipeline.reset(new PipelineBase);
+            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
+                           "__raygen__rg_region", "__miss__ms_region",
+                           "__closesthit__ch_region", "__intersection__is_region",
+                           TraceMode::REGION, 4, 1);
+            std::cout << "Region scene: " << regionsScene->numRegions() << " primitives\n";
+        }
+        else if (traceMode == TraceMode::OCTREE)
+        {
+            // True hierarchical octree traversal: single top-level AABB GAS,
+            // the closest-hit descends the octree skipping empty subtrees.
+            volScene.reset(new VolumeScene);
+            volScene->init(optixContext.context(), optixContext.stream(),
+                           make_float3(volume.originX, volume.originY, volume.originZ),
+                           make_float3(volume.maxX(), volume.maxY(), volume.maxZ()));
+            params.handle = volScene->handle();
+
+            octreeVol.reset(new OctreeVolume);
+            octreeVol->build(volume, tf, octreeLeafSize, scalarMin, scalarMax, brickEpsilon);
+            params.octreeNodes    = octreeVol->deviceNodes();
+            params.octreeChild    = octreeVol->deviceChild();
+            params.octreeNodeCount = static_cast<unsigned int>(octreeVol->numNodes());
+
+            std::cout << "Octree: " << octreeVol->numNodes() << " nodes, "
+                      << octreeVol->nodeBytes() / (1024.0 * 1024.0) << " MB, "
+                      << octreeVol->numLeaves() << " leaves, "
+                      << octreeVol->numRelevant() << " relevant, "
+                      << octreeVol->numEmpty() << " empty, maxDepth="
+                      << octreeVol->maxDepth() << "\n";
+
+            pipeline.reset(new PipelineBase);
+            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
+                           "__raygen__rg_optix", "__miss__ms", "__closesthit__ch_octree",
+                           "__intersection__is", TraceMode::OCTREE);
+        }
+        else if (traceMode == TraceMode::OCTREE_REGIONS)
+        {
+            // Octree leaves emitted as GAS AABBs: RT-core hardware skip with
+            // data-adaptive granularity (non-empty leaves, variable size).
+            ocRegionsScene.reset(new OctreeRegionsScene);
+            ocRegionsScene->init(optixContext.context(), optixContext.stream(),
+                                 volume, tf, octreeLeafSize, scalarMin, scalarMax,
+                                 brickEpsilon);
+            params.handle        = ocRegionsScene->handle();
+            params.ocRegionAabbs = ocRegionsScene->deviceAabbs();
+            params.ocRegionNode  = ocRegionsScene->deviceNodeMap();
+
+            std::cout << "Octree-regions scene: " << ocRegionsScene->numRegions()
+                      << " leaf primitives\n";
+
+            pipeline.reset(new PipelineBase);
+            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
+                           "__raygen__rg_region_octree", "__miss__ms_region",
+                           "__closesthit__ch_ocregion", "__intersection__is_region_octree",
+                           TraceMode::OCTREE_REGIONS, 4, 1);
         }
         else
         {

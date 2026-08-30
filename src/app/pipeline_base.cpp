@@ -36,10 +36,18 @@ void PipelineBase::init(OptixDeviceContext context,
                         const char*        missEntry,
                         const char*        closestHitEntry,
                         const char*        intersectionEntry,
-                        TraceMode          mode)
+                        TraceMode          mode,
+                        unsigned int       numPayloadValues,
+                        unsigned int       maxTraceDepth)
 {
     context_ = context;
     mode_    = mode;
+
+    // numPayloadValues is accepted for API symmetry but not applied: all
+    // strategy programs share one OptiX module, which always reserves 4
+    // payload values (see createModule). Only maxTraceDepth is per-mode.
+    (void)numPayloadValues;
+    maxTraceDepth_    = maxTraceDepth;
 
     createModule(optixIrPath);
     createProgramGroups(raygenEntry, missEntry, closestHitEntry, intersectionEntry);
@@ -53,8 +61,14 @@ void PipelineBase::createModule(const std::string& optixIrPath)
 
     compileOptions_.usesMotionBlur              = false;
     compileOptions_.traversableGraphFlags       = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-    compileOptions_.numPayloadValues            = 3;
-    compileOptions_.numAttributeValues          = 2;
+    // All strategy programs (dense, bricked, adaptive, region, octree,
+    // octree-regions) are compiled into a single shared OptiX IR module, and
+    // numPayloadValues is a per-module compile option. The region-style miss
+    // programs use payload slot 3 (the ray-loop miss flag), so the module must
+    // always reserve >= 4 payload values; strategies that only use 3 are
+    // unaffected by reserving 4.
+    compileOptions_.numPayloadValues            = 4;
+    compileOptions_.numAttributeValues          = 3;
     compileOptions_.exceptionFlags              = OPTIX_EXCEPTION_FLAG_NONE;
     compileOptions_.pipelineLaunchParamsVariableName = "params";
 
@@ -127,7 +141,7 @@ void PipelineBase::createPipeline()
     if (hitgroupPG_)   ++num_groups;
 
     OptixPipelineLinkOptions link_options = {};
-    link_options.maxTraceDepth            = 1;
+    link_options.maxTraceDepth            = maxTraceDepth_;
 
     char   LOG[2048];
     size_t LOG_SIZE = sizeof(LOG);
@@ -139,9 +153,15 @@ void PipelineBase::createPipeline()
     for (unsigned int i = 0; i < num_groups; ++i)
         OPTIX_CHECK(optixUtilAccumulateStackSizes(program_groups[i], &stack_sizes, pipeline_));
 
-    uint32_t css;
-    OPTIX_CHECK(optixUtilComputeStackSizes(&stack_sizes, 1, 0, 0, &css, &css, &css));
-    OPTIX_CHECK(optixPipelineSetStackSize(pipeline_, 0, 0, css, 1));
+    uint32_t css, ccs, dcs;
+    OPTIX_CHECK(optixUtilComputeStackSizes(&stack_sizes, 1,
+                                           maxTraceDepth_, 0, &css, &ccs, &dcs));
+    // The region-style ray-generation loops keep a larger live register/local
+    // frame across each optixTrace call; the computed stack size can be too
+    // tight for them. Give the continuation stack generous headroom so a
+    // program's local frame is never truncated (local-memory overflow).
+    css = static_cast<uint32_t>((static_cast<size_t>(css) * 2) + 4096);
+    OPTIX_CHECK(optixPipelineSetStackSize(pipeline_, 0, 0, css, maxTraceDepth_));
 }
 
 void PipelineBase::createSbt()

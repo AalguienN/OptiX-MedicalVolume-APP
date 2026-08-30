@@ -18,6 +18,20 @@ struct BrickMeta
     unsigned int       relevant;   // 1 if maxOpacity >= epsilon
 };
 
+// Octree node for the SVO / Octree strategies (Variants A and AB). The octree
+// is used purely as a spatial acceleration structure over the dense grid:
+// each node records whether its subtree contains any rendering-relevant voxel,
+// and leaf nodes reference a half-open voxel region [voxelMin, voxelMax) of the
+// unmodified dense grid rather than duplicating it.
+struct OctreeNode
+{
+    unsigned int relevant;      // 1 if the subtree has a rendering-relevant voxel
+    unsigned int isLeaf;        // 1 = leaf (dense-grid region), 0 = internal
+    unsigned int childOffset;   // octreeChild[] offset of this node's 8 children
+    unsigned int voxelMin[3];   // half-open voxel bounds of this node's region
+    unsigned int voxelMax[3];
+};
+
 struct Params
 {
     uchar4*                image;
@@ -47,6 +61,25 @@ struct Params
     // matching the threshold used to build the distance map / occupancy.
     cudaTextureObject_t    distanceTex;
     float                  epsilon;
+
+    // Region strategy fields (host sets them only for TraceMode::REGION).
+    // regionAabbs is the per-primitive AABB array of the multi-primitive GAS;
+    // each primitive is one rendering-relevant brick, so the intersection
+    // program reads its own bounds and the closest-hit marches that brick span.
+    OptixAabb*             regionAabbs;
+
+    // SVO / Octree strategy fields (host sets them only for TraceMode::OCTREE
+    // / OCTREE_REGIONS). Nodes are stored in a preorder array with the root at
+    // index 0; octreeChild holds the 8 child indices of each internal node.
+    OctreeNode*            octreeNodes;
+    unsigned int*          octreeChild;
+    unsigned int           octreeNodeCount;
+
+    // Octree-regions (Variant AB): per-primitive world AABBs of the non-empty
+    // octree leaves, uploaded flat, plus the node index each primitive belongs
+    // to so the closest-hit can march that leaf's voxel region.
+    OptixAabb*             ocRegionAabbs;
+    unsigned int*          ocRegionNode;
 
     // Optional per-frame diagnostic counters (device, 3 x unsigned int):
     // [0] = volume samples, [1] = distance-map reads, [2] = leaps. Null to
