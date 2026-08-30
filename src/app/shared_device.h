@@ -81,6 +81,15 @@ struct Params
     OptixAabb*             ocRegionAabbs;
     unsigned int*          ocRegionNode;
 
+    // NanoVDB strategy fields (host sets them only for TraceMode::NANOVDB).
+    // nanovdbGrid is a device pointer to an uploaded nanovdb::FloatGrid (cast on
+    // the device side to const nanovdb::FloatGrid*). The closest-hit samples it
+    // with NanoVDB's device Accessor and skips empty leaf tiles via getDim().
+    // nanovdbNearest selects the per-sample interpolation order: 1 = nearest
+    // voxel (1 accessor probe, ~4x faster), 0 = trilinear (dense-equivalent).
+    const void*            nanovdbGrid;
+    unsigned int           nanovdbNearest;
+
     // Optional per-frame diagnostic counters (device, 3 x unsigned int):
     // [0] = volume samples, [1] = distance-map reads, [2] = leaps. Null to
     // disable. Only incremented by the manual marchers for performance analysis.

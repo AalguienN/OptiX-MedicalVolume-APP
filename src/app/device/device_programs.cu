@@ -147,3 +147,4 @@ extern "C" __global__ void __closesthit__ch()
 #include "region_programs.cu"
 #include "octree_programs.cu"
 #include "octree_region_programs.cu"
+#include "nanovdb_programs.cu"

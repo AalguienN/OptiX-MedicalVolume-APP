@@ -4,6 +4,7 @@ set(DEVICE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/device/device_programs.cu")
 add_optix_ir_target(OPTIXIR_FILE "${DEVICE_SRC}"
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/src/common"
+    "${NANOVDB_INCLUDE_DIR}"
 )
 
 add_executable(optix_app
@@ -20,6 +21,7 @@ add_executable(optix_app
     adaptive_grid_marcher.cpp
     octree_volume.cpp
     octree_regions_scene.cpp
+    nanovdb_volume.cpp
     dicom_loader.cpp
     volume.cpp
     ../common/metrics.cpp
@@ -28,6 +30,7 @@ add_executable(optix_app
 
 target_include_directories(optix_app PRIVATE
     ${OPTIX_INCLUDE_DIR}
+    ${NANOVDB_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src/common
     ${CUDA_INCLUDE_DIRS}

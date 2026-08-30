@@ -14,6 +14,7 @@
 #include "regions_scene.h"
 #include "octree_volume.h"
 #include "octree_regions_scene.h"
+#include "nanovdb_volume.h"
 #include "shared_device.h"
 #include "transfer_function.h"
 #include "volume.h"
@@ -26,6 +27,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -82,13 +84,17 @@ void printUsage(const char* prog) {
               << "  --mode octree      SVO / Octree: hierarchical octree empty-subtree skipping\n"
               << "                     (software traversal, single top-level AABB)\n"
               << "  --mode octree-regions  Octree regions: octree leaves emitted as GAS AABBs so\n"
-              << "                     RT cores skip empty space with data-adaptive granularity\n"
-              << "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked (default 16)\n"
-              << "  --epsilon <f>      Opacity threshold classifying a brick/voxel as rendering-\n"
-              << "                     relevant for --mode bricked / adaptive (default 0.01)\n"
-              << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
-              << "  --window <n>       FPS observation window in frames (default 120)\n"
-              << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n";
+               << "                     RT cores skip empty space with data-adaptive granularity\n"
+               << "  --mode nanovdb     NanoVDB: sparse GPU volume tree (NanoVDB) with built-in\n"
+               << "                     empty-space skipping, sampled via the device accessor\n"
+               << "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked (default 16)\n"
+               << "  --epsilon <f>      Opacity threshold classifying a brick/voxel as rendering-\n"
+<< "                     relevant for --mode bricked / adaptive / nanovdb (default 0.01)\n"
+               << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
+               << "  --window <n>       FPS observation window in frames (default 120)\n"
+               << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n"
+               << "  --nanovdb-sampler <nearest|trilinear>  NanoVDB interpolation (default nearest)\n"
+               << "  --snapshot <path>  Write the last rendered frame to <path> as a PPM image\n";
 }
 
 // Shared per-frame render loop. The Params struct is wired once before this
@@ -97,7 +103,8 @@ void printUsage(const char* prog) {
 void runRenderLoop(GlWindow& window, Display& display, InteropBuffer& interopBuffer,
                    OptixContext& optixContext, PipelineBase& pipeline,
                    MetricsCollector& metrics, Camera& camera,
-                   Params& params, CUdeviceptr d_params, unsigned int maxFrames)
+                   Params& params, CUdeviceptr d_params, unsigned int maxFrames,
+                   const char* snapshotPath)
 {
     unsigned int frame = 0;
     while (!window.shouldClose() && (maxFrames == 0 || frame < maxFrames))
@@ -151,6 +158,35 @@ void runRenderLoop(GlWindow& window, Display& display, InteropBuffer& interopBuf
     }
 
     metrics.flush();
+
+    // Optional last-frame dump (PPM P6) for offline visual-fidelity checks
+    // against the dense baseline (Section "Visual Fidelity" of the thesis).
+    if (snapshotPath && snapshotPath[0])
+    {
+        uchar4* d_pixels = interopBuffer.map(optixContext.stream());
+        std::vector<uchar4> host(params.image_width * params.image_height);
+        CUDA_CHECK(cudaMemcpy(host.data(), d_pixels,
+                              host.size() * sizeof(uchar4), cudaMemcpyDeviceToHost));
+        interopBuffer.unmap(optixContext.stream());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        std::ofstream out(snapshotPath, std::ios::binary);
+        if (out)
+        {
+            out << "P6\n" << params.image_width << " " << params.image_height << "\n255\n";
+            for (const uchar4& p : host)
+            {
+                out.put(static_cast<char>(p.x));
+                out.put(static_cast<char>(p.y));
+                out.put(static_cast<char>(p.z));
+            }
+            std::cout << "Snapshot written to " << snapshotPath << "\n";
+        }
+        else
+        {
+            std::cerr << "Failed to open snapshot file " << snapshotPath << "\n";
+        }
+    }
 }
 
 void printMetricsSummary(const MetricsCollector& metrics, const char* modeLabel)
@@ -180,11 +216,13 @@ int main(int argc, char** argv)
     std::string seriesPath = argv[1];
     TraceMode traceMode = TraceMode::MANUAL;
     std::string metricsPath;
+    std::string snapshotPath;
     unsigned int metricsWindow = 120;
     int brickSize = 16;
     float brickEpsilon = 0.01f;
     int octreeLeafSize = 8;
     unsigned int maxFrames = 0;   // 0 = run until window closes
+    bool nanovdbNearest = false;  // 1 = nearest, 0 = trilinear (NanoVDB, default)
 
     for (int i = 2; i < argc; ++i)
     {
@@ -205,6 +243,8 @@ int main(int argc, char** argv)
                 traceMode = TraceMode::OCTREE;
             else if (std::strcmp(argv[i], "octree-regions") == 0)
                 traceMode = TraceMode::OCTREE_REGIONS;
+            else if (std::strcmp(argv[i], "nanovdb") == 0)
+                traceMode = TraceMode::NANOVDB;
             else
             {
                 std::cerr << "Unknown mode: " << argv[i] << "\n";
@@ -228,6 +268,10 @@ int main(int argc, char** argv)
         {
             metricsPath = argv[++i];
         }
+        else if (std::strcmp(argv[i], "--snapshot") == 0 && i + 1 < argc)
+        {
+            snapshotPath = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--window") == 0 && i + 1 < argc)
         {
             metricsWindow = static_cast<unsigned int>(std::strtoul(argv[++i], nullptr, 10));
@@ -235,6 +279,21 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
         {
             maxFrames = static_cast<unsigned int>(std::strtoul(argv[++i], nullptr, 10));
+        }
+        else if (std::strcmp(argv[i], "--nanovdb-sampler") == 0 && i + 1 < argc)
+        {
+            const std::string v = argv[++i];
+            if (v == "nearest")
+                nanovdbNearest = true;
+            else if (v == "trilinear")
+                nanovdbNearest = false;
+            else
+            {
+                std::cerr << "Unknown nanovdb sampler: " << v
+                          << " (expected 'nearest' or 'trilinear')\n";
+                printUsage(argv[0]);
+                return 1;
+            }
         }
         else
         {
@@ -250,7 +309,8 @@ int main(int argc, char** argv)
         (traceMode == TraceMode::ADAPTIVE) ? "adaptive" :
         (traceMode == TraceMode::REGION)   ? "region"   :
         (traceMode == TraceMode::OCTREE)   ? "octree"   :
-        (traceMode == TraceMode::OCTREE_REGIONS) ? "octree-regions" : "manual";
+        (traceMode == TraceMode::OCTREE_REGIONS) ? "octree-regions" :
+        (traceMode == TraceMode::NANOVDB)  ? "nanovdb" : "manual";
 
     try
     {
@@ -390,6 +450,7 @@ int main(int argc, char** argv)
         std::unique_ptr<RegionsScene> regionsScene;
         std::unique_ptr<OctreeVolume> octreeVol;
         std::unique_ptr<OctreeRegionsScene> ocRegionsScene;
+        std::unique_ptr<NanoVDBVolume> nanovdbVol;
         std::unique_ptr<PipelineBase> pipeline;
 
         Params params = {};
@@ -537,6 +598,34 @@ int main(int argc, char** argv)
                            "__closesthit__ch_ocregion", "__intersection__is_region_octree",
                            TraceMode::OCTREE_REGIONS, 4, 1);
         }
+        else if (traceMode == TraceMode::NANOVDB)
+        {
+            // NanoVDB sparse GPU volume. A single top-level AABB GAS (identical
+            // to the other GAS-based strategies); the closest-hit marches with
+            // NanoVDB's device accessor, which performs its own empty-space
+            // skipping internally (thesis \ref tab:strategy-optix-mapping).
+            volScene.reset(new VolumeScene);
+            volScene->init(optixContext.context(), optixContext.stream(),
+                           make_float3(volume.originX, volume.originY, volume.originZ),
+                           make_float3(volume.maxX(), volume.maxY(), volume.maxZ()));
+            params.handle = volScene->handle();
+
+            nanovdbVol.reset(new NanoVDBVolume);
+            nanovdbVol->build(volume, tf, scalarMin, scalarMax, brickEpsilon);
+            params.nanovdbGrid   = nanovdbVol->deviceGrid();
+            params.nanovdbNearest = nanovdbNearest;
+
+            std::cout << "NanoVDB grid: " << nanovdbVol->hostBytes() / (1024.0 * 1024.0)
+                      << " MB on GPU, " << nanovdbVol->numActiveVoxels() << " active voxels, "
+                      << "sparsity=" << (100.0f * nanovdbVol->sparsityRatio()) << "%\n";
+            std::cout << "NanoVDB sampler: "
+                      << (nanovdbNearest ? "nearest (fast)" : "trilinear (dense-equivalent)") << "\n";
+
+            pipeline.reset(new PipelineBase);
+            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
+                           "__raygen__rg_optix", "__miss__ms", "__closesthit__ch_nanovdb",
+                           "__intersection__is", TraceMode::NANOVDB);
+        }
         else
         {
             placeScene.reset(new PlaceholderScene);
@@ -564,7 +653,8 @@ int main(int argc, char** argv)
         std::cout << "Starting render loop (" << modeLabel << " mode)...\n";
 
         runRenderLoop(window, display, interopBuffer, optixContext, *pipeline,
-                      metrics, camera, params, d_params, maxFrames);
+                      metrics, camera, params, d_params, maxFrames,
+                      snapshotPath.empty() ? nullptr : snapshotPath.c_str());
 
         printMetricsSummary(metrics, modeLabel);
 

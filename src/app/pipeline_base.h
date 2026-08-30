@@ -7,7 +7,7 @@
 
 #include "shared_device.h"
 
-enum class TraceMode { MANUAL, OPTIX, BRICKED, ADAPTIVE, REGION, OCTREE, OCTREE_REGIONS };
+enum class TraceMode { MANUAL, OPTIX, BRICKED, ADAPTIVE, REGION, OCTREE, OCTREE_REGIONS, NANOVDB };
 
 class PipelineBase
 {
