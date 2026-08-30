@@ -7,7 +7,7 @@
 
 #include "shared_device.h"
 
-enum class TraceMode { MANUAL, OPTIX, BRICKED };
+enum class TraceMode { MANUAL, OPTIX, BRICKED, ADAPTIVE };
 
 class PipelineBase
 {

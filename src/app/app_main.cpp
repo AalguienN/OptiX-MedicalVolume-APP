@@ -1,3 +1,4 @@
+#include "adaptive_grid_marcher.h"
 #include "bricked_volume.h"
 #include "camera.h"
 #include "check_macros.h"
@@ -64,16 +65,18 @@ void glfwScrollCallback(GLFWwindow *win, double /*xoffset*/, double yoffset) {
 }
 
 void printUsage(const char* prog) {
-    std::cerr << "Usage: " << prog << " <path-to-dicom-series> [--mode manual|optix|bricked]\n"
+    std::cerr << "Usage: " << prog << " <path-to-dicom-series> [--mode manual|optix|bricked|adaptive]\n"
               << "\n"
               << "Options:\n"
               << "  --mode manual      Dense baseline: manual ray-AABB traversal in raygen (default)\n"
               << "  --mode optix       OptiX trace: AABB GAS + intersection program + optixTrace\n"
               << "  --mode bricked     Bricked / tiled volume: subdivides the volume into bricks of\n"
               << "                     n^3 voxels and skips empty bricks during traversal\n"
+              << "  --mode adaptive    Adaptive-step grid marcher: Chebyshev distance map drives\n"
+              << "                     the ray-march step size (software, no RT-core traversal)\n"
               << "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked (default 16)\n"
-              << "  --epsilon <f>      Opacity threshold classifying a brick as rendering-relevant\n"
-              << "                     for --mode bricked (default 0.01)\n"
+              << "  --epsilon <f>      Opacity threshold classifying a brick/voxel as rendering-\n"
+              << "                     relevant for --mode bricked / adaptive (default 0.01)\n"
               << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
               << "  --window <n>       FPS observation window in frames (default 120)\n";
 }
@@ -180,6 +183,8 @@ int main(int argc, char** argv)
                 traceMode = TraceMode::MANUAL;
             else if (std::strcmp(argv[i], "bricked") == 0)
                 traceMode = TraceMode::BRICKED;
+            else if (std::strcmp(argv[i], "adaptive") == 0)
+                traceMode = TraceMode::ADAPTIVE;
             else
             {
                 std::cerr << "Unknown mode: " << argv[i] << "\n";
@@ -212,8 +217,9 @@ int main(int argc, char** argv)
     }
 
     const char* modeLabel =
-        (traceMode == TraceMode::OPTIX)   ? "optix"   :
-        (traceMode == TraceMode::BRICKED) ? "bricked" : "manual";
+        (traceMode == TraceMode::OPTIX)    ? "optix"    :
+        (traceMode == TraceMode::BRICKED)  ? "bricked"  :
+        (traceMode == TraceMode::ADAPTIVE) ? "adaptive" : "manual";
 
     try
     {
@@ -221,6 +227,8 @@ int main(int argc, char** argv)
         if (traceMode == TraceMode::BRICKED)
             std::cout << "Brick size: " << brickSize << "^3 voxels, epsilon="
                       << brickEpsilon << "\n";
+        if (traceMode == TraceMode::ADAPTIVE)
+            std::cout << "Adaptive-step distance map, epsilon=" << brickEpsilon << "\n";
         std::cout << "Loading DICOM series from: " << seriesPath << "\n";
         DicomSeries series = loadDicomSeries(seriesPath);
 
@@ -347,6 +355,7 @@ int main(int argc, char** argv)
         std::unique_ptr<VolumeScene> volScene;
         std::unique_ptr<PlaceholderScene> placeScene;
         std::unique_ptr<BrickedVolume> brickVol;
+        std::unique_ptr<AdaptiveGridMarcher> adaptiveGrid;
         std::unique_ptr<PipelineBase> pipeline;
 
         Params params = {};
@@ -360,6 +369,8 @@ int main(int argc, char** argv)
         params.volumeMax     = make_float3(volume.maxX(), volume.maxY(), volume.maxZ());
         params.scalarMin     = scalarMin;
         params.scalarMax     = scalarMax;
+        params.minSpacing    = fminf(volume.spacingX,
+                               fminf(volume.spacingY, volume.spacingZ));
 
         if (traceMode == TraceMode::OPTIX)
         {
@@ -399,6 +410,31 @@ int main(int argc, char** argv)
             pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
                            "__raygen__rg_optix", "__miss__ms", "__closesthit__ch_brick",
                            "__intersection__is", TraceMode::BRICKED);
+        }
+        else if (traceMode == TraceMode::ADAPTIVE)
+        {
+            // Single AABB GAS, identical to the OptiX-traced baseline, but the
+            // adaptive raygen never optixTrace-s it: the whole march, including
+            // the empty-space step-size decision, runs in software.
+            volScene.reset(new VolumeScene);
+            volScene->init(optixContext.context(), optixContext.stream(),
+                           make_float3(volume.originX, volume.originY, volume.originZ),
+                           make_float3(volume.maxX(), volume.maxY(), volume.maxZ()));
+            params.handle = volScene->handle();
+
+            adaptiveGrid.reset(new AdaptiveGridMarcher);
+            adaptiveGrid->build(volume, tf, scalarMin, scalarMax, brickEpsilon);
+            params.distanceTex = adaptiveGrid->distanceTex();
+
+            std::cout << "Distance map: " << adaptiveGrid->dims().x << "x"
+                      << adaptiveGrid->dims().y << "x" << adaptiveGrid->dims().z
+                      << ", " << adaptiveGrid->distanceBytes() / (1024.0 * 1024.0)
+                      << " MB\n";
+
+            pipeline.reset(new PipelineBase);
+            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
+                           "__raygen__rg_adaptive", "__miss__ms", "__closesthit__ch",
+                           nullptr, TraceMode::ADAPTIVE);
         }
         else
         {

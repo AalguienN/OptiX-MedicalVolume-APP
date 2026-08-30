@@ -143,3 +143,4 @@ extern "C" __global__ void __closesthit__ch()
 // Strategy-specific device programs. #included so that all programs land in
 // the same OptiX IR module (single OptixModule) that the pipeline loads.
 #include "brick_programs.cu"
+#include "adaptive_programs.cu"
