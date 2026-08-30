@@ -1,4 +1,4 @@
-#include "regions_scene.h"
+#include "bricked_regions_scene.h"
 
 #include "check_macros.h"
 #include "vec_math.h"
@@ -7,7 +7,7 @@
 #include <cmath>
 #include <iostream>
 
-RegionsScene::~RegionsScene()
+BrickedRegionsScene::~BrickedRegionsScene()
 {
     if (d_aabb_)
         CUDA_CHECK_NOEXCEPT(cudaFree(reinterpret_cast<void*>(d_aabb_)));
@@ -17,7 +17,7 @@ RegionsScene::~RegionsScene()
         CUDA_CHECK_NOEXCEPT(cudaFree(reinterpret_cast<void*>(d_gasOutput_)));
 }
 
-void RegionsScene::init(OptixDeviceContext context, CUstream stream,
+void BrickedRegionsScene::init(OptixDeviceContext context, CUstream stream,
                         const Volume& volume, const TransferFunction& tf,
                         int brickSize, float scalarMin, float scalarMax, float epsilon)
 {
@@ -108,7 +108,7 @@ void RegionsScene::init(OptixDeviceContext context, CUstream stream,
 
     numRegions_ = static_cast<int>(aabbs_.size());
 
-    std::cout << "Region strategy: " << numRegions_ << "/" << numBricks_
+    std::cout << "Bricked-regions strategy: " << numRegions_ << "/" << numBricks_
               << " bricks are relevant (epsilon=" << epsilon << ")\n";
 
     // Upload per-primitive AABBs and primitive->brick mapping.
@@ -125,7 +125,7 @@ void RegionsScene::init(OptixDeviceContext context, CUstream stream,
     buildGAS(context, stream);
 }
 
-void RegionsScene::buildGAS(OptixDeviceContext context, CUstream stream)
+void BrickedRegionsScene::buildGAS(OptixDeviceContext context, CUstream stream)
 {
     if (aabbs_.empty())
     {

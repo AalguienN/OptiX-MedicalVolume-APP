@@ -9,8 +9,8 @@
 
 #include <vector>
 
-// Host-side construction and GAS build of the "region" strategy
-// (--mode region, Variant B of the thesis).
+// Host-side construction and GAS build of the "bricked-regions" strategy
+// (--mode bricked-regions): the bricked method but with hardware empty-skip.
 //
 // The volume is subdivided into fixed-size bricks (reusing the bricked
 // strategy's classification). Every brick whose metadata classifies it as
@@ -21,14 +21,14 @@
 // program is invoked only for the (small) non-empty regions. This is in
 // contrast to the bricked strategy, which keeps one top-level AABB and does
 // the relevance check in software during the march.
-class RegionsScene
+class BrickedRegionsScene
 {
 public:
-    RegionsScene() = default;
-    ~RegionsScene();
+    BrickedRegionsScene() = default;
+    ~BrickedRegionsScene();
 
-    RegionsScene(const RegionsScene&)            = delete;
-    RegionsScene& operator=(const RegionsScene&) = delete;
+    BrickedRegionsScene(const BrickedRegionsScene&)            = delete;
+    BrickedRegionsScene& operator=(const BrickedRegionsScene&) = delete;
 
     // Classifies the volume into bricks, keeps only the relevant ones,
     // uploads the per-primitive AABBs and the primitive->brick mapping, and

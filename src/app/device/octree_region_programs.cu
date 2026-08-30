@@ -1,22 +1,23 @@
 ///////////////////////////////////////////////////////////////////////////////
-// Octree-regions strategy (--mode octree-regions, Variant AB) device programs.
+// Octree-regions strategy (--mode octree-regions, Variant B of the thesis)
+// device programs.
 //
-// Hybrid of Variant A (octree) and Variant B (regions): the GAS contains one
-// custom AABB primitive per rendering-relevant octree leaf (built by
-// OctreeRegionsScene), so the OptiX BVH / RT cores skip empty space with the
-// data-adaptive granularity of the octree rather than fixed bricks. Ray
-// traversal is the same utility-ray loop as the region strategy: each
-// optixTrace returns the nearest remaining relevant leaf as
-// [entry t, exit t, primitive index] in the payload, and the ray-generation
-// program marches exactly that leaf's span before re-tracing from just past
-// its exit. The march is identical to the dense baseline so the output is
-// visually unchanged.
+// Combines Variant A (octree) with the hardware-skip idea of the
+// bricked-regions strategy: the GAS contains one custom AABB primitive per
+// rendering-relevant octree leaf (built by OctreeRegionsScene), so the OptiX
+// BVH / RT cores skip empty space with the data-adaptive granularity of the
+// octree rather than fixed bricks. Ray traversal is the same utility-ray loop
+// as the bricked-regions strategy: each optixTrace returns the nearest
+// remaining relevant leaf as [entry t, exit t, primitive index] in the
+// payload, and the ray-generation program marches exactly that leaf's span
+// before re-tracing from just past its exit. The march is identical to the
+// dense baseline so the output is visually unchanged.
 ///////////////////////////////////////////////////////////////////////////////
 #include "shared_device_programs.h"
 
-// regionMarchSeed (defined in region_programs.cu, same translation unit)
-// marches the span [tmin,tmax] with the fixed dense-baseline step, continuing
-// from the accumulated RGBA. It is reused verbatim here.
+// regionMarchSeed (defined in bricked_regions_programs.cu, same translation
+// unit) marches the span [tmin,tmax] with the fixed dense-baseline step,
+// continuing from the accumulated RGBA. It is reused verbatim here.
 
 // ============================================================
 // Ray-generation program: utility-ray loop over non-empty octree leaves.

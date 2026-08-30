@@ -1,7 +1,7 @@
 // NanoVDB strategy device programs (--mode nanovdb).
 //
 // Following the single-AABB-GAS + closest-hit-march pattern shared by the
-// OPTIX / BRICKED / OCTREE strategies: the shared __raygen__rg_optix and
+// OPTIX / OCTREE strategies: the shared __raygen__rg_optix and
 // __intersection__is report the volume entry/exit t-range, and this closest-hit
 // program runs the march. The march keeps the SAME fixed step size, transfer
 // function and front-to-back compositing as the dense baseline (volumeMarch) so

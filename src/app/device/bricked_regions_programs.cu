@@ -1,9 +1,10 @@
 ///////////////////////////////////////////////////////////////////////////////
-// Region strategy (--mode region, Variant B) device programs.
+// Bricked-regions strategy (--mode bricked-regions) device programs: the
+// bricked method but with hardware RT-core empty-skip.
 //
 // The GAS contains one custom AABB primitive per rendering-relevant brick
-// (built by RegionsScene); empty bricks have no primitive, so the OptiX BVH
-// / RT cores skip empty space in hardware. Ray traversal is a *utility-ray
+// (built by BrickedRegionsScene); empty bricks have no primitive, so the OptiX
+// BVH / RT cores skip empty space in hardware. Ray traversal is a *utility-ray
 // loop* running in the ray-generation program: each optixTrace (with
 // maxTraceDepth = 1) returns the nearest remaining non-empty brick as
 // [entry t, exit t, primitive index] carried through the payload; the raygen
@@ -77,7 +78,7 @@ static __forceinline__ __device__ void regionMarchSeed(
 // Each optixTrace returns the nearest remaining brick's [entry, exit, prim]
 // via the payload; the raygen marches that span and continues.
 // ============================================================
-extern "C" __global__ void __raygen__rg_region()
+extern "C" __global__ void __raygen__rg_bricked_regions()
 {
     const uint3 idx = optixGetLaunchIndex();
     const uint3 dim = optixGetLaunchDimensions();
@@ -154,16 +155,16 @@ extern "C" __global__ void __raygen__rg_region()
 }
 
 // ============================================================
-// Intersection program: reads this primitive's brick AABB from the region
-// array and reports entry/exit t (attributes 0,1) plus primitive index
-// (attribute 2). Invoked only for primitives (non-empty bricks) whose AABB
-// the hardware determined the ray may overlap.
+// Intersection program: reads this primitive's brick AABB from the
+// brickedRegions array and reports entry/exit t (attributes 0,1) plus
+// primitive index (attribute 2). Invoked only for primitives (non-empty
+// bricks) whose AABB the hardware determined the ray may overlap.
 // ============================================================
-extern "C" __global__ void __intersection__is_region()
+extern "C" __global__ void __intersection__is_bricked_regions()
 {
     const unsigned int primIdx = optixGetPrimitiveIndex();
 
-    OptixAabb aabb = params.regionAabbs[primIdx];
+    OptixAabb aabb = params.brickedRegionsAabbs[primIdx];
     float3 bmin = make_float3(aabb.minX, aabb.minY, aabb.minZ);
     float3 bmax = make_float3(aabb.maxX, aabb.maxY, aabb.maxZ);
 
@@ -192,7 +193,7 @@ extern "C" __global__ void __intersection__is_region()
 // Closest-hit program: forward the intersection-reported entry/exit t and
 // primitive index to the ray-generation payload. Does not march.
 // ============================================================
-extern "C" __global__ void __closesthit__ch_region()
+extern "C" __global__ void __closesthit__ch_bricked_regions()
 {
     optixSetPayload_0(optixGetAttribute_0());
     optixSetPayload_1(optixGetAttribute_1());
@@ -200,9 +201,9 @@ extern "C" __global__ void __closesthit__ch_region()
 }
 
 // ============================================================
-// Miss program for the region ray loop: sets the miss flag (payload 3) so the
-// ray-generation loop knows there are no more non-empty bricks along the ray.
-// ============================================================
+// Miss program for the bricked-regions (and octree-regions) ray loop: sets
+// the miss flag (payload 3) so the ray-generation loop knows there are no more
+// non-empty bricks along the ray. Shared with the octree-regions strategy.
 extern "C" __global__ void __miss__ms_region()
 {
     optixSetPayload_3(1u);

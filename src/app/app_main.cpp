@@ -1,5 +1,4 @@
 #include "adaptive_grid_marcher.h"
-#include "bricked_volume.h"
 #include "camera.h"
 #include "check_macros.h"
 #include "dicom_loader.h"
@@ -11,7 +10,7 @@
 #include "optix_context.h"
 #include "pipeline_base.h"
 #include "placeholder_scene.h"
-#include "regions_scene.h"
+#include "bricked_regions_scene.h"
 #include "octree_volume.h"
 #include "octree_regions_scene.h"
 #include "nanovdb_volume.h"
@@ -70,26 +69,25 @@ void glfwScrollCallback(GLFWwindow *win, double /*xoffset*/, double yoffset) {
 }
 
 void printUsage(const char* prog) {
-    std::cerr << "Usage: " << prog << " <path-to-dicom-series> [--mode manual|optix|bricked|adaptive]\n"
+    std::cerr << "Usage: " << prog << " <path-to-dicom-series> [--mode manual|optix|adaptive]\n"
               << "\n"
               << "Options:\n"
               << "  --mode manual      Dense baseline: manual ray-AABB traversal in raygen (default)\n"
               << "  --mode optix       OptiX trace: AABB GAS + intersection program + optixTrace\n"
-              << "  --mode bricked     Bricked / tiled volume: subdivides the volume into bricks of\n"
-              << "                     n^3 voxels and skips empty bricks during traversal\n"
               << "  --mode adaptive    Adaptive-step grid marcher: Chebyshev distance map drives\n"
               << "                     the ray-march step size (software, no RT-core traversal)\n"
-              << "  --mode region      Region strategy: one GAS AABB per non-empty brick; RT cores\n"
-              << "                     skip empty space in hardware\n"
+               << "  --mode bricked-regions  Bricked-regions: bricked volume but one GAS AABB per\n"
+               << "                     non-empty brick; RT cores skip empty space in hardware\n"
               << "  --mode octree      SVO / Octree: hierarchical octree empty-subtree skipping\n"
               << "                     (software traversal, single top-level AABB)\n"
               << "  --mode octree-regions  Octree regions: octree leaves emitted as GAS AABBs so\n"
                << "                     RT cores skip empty space with data-adaptive granularity\n"
                << "  --mode nanovdb     NanoVDB: sparse GPU volume tree (NanoVDB) with built-in\n"
                << "                     empty-space skipping, sampled via the device accessor\n"
-               << "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked (default 16)\n"
+               << "  --brick-size <n>   Voxels per brick edge (n^3) for --mode bricked-regions\n"
+               << "                     (default 16)\n"
                << "  --epsilon <f>      Opacity threshold classifying a brick/voxel as rendering-\n"
-<< "                     relevant for --mode bricked / adaptive / nanovdb (default 0.01)\n"
+<< "                     relevant for --mode bricked-regions / adaptive / nanovdb (default 0.01)\n"
                << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
                << "  --window <n>       FPS observation window in frames (default 120)\n"
                << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n"
@@ -233,12 +231,10 @@ int main(int argc, char** argv)
                 traceMode = TraceMode::OPTIX;
             else if (std::strcmp(argv[i], "manual") == 0)
                 traceMode = TraceMode::MANUAL;
-            else if (std::strcmp(argv[i], "bricked") == 0)
-                traceMode = TraceMode::BRICKED;
             else if (std::strcmp(argv[i], "adaptive") == 0)
                 traceMode = TraceMode::ADAPTIVE;
-            else if (std::strcmp(argv[i], "region") == 0)
-                traceMode = TraceMode::REGION;
+            else if (std::strcmp(argv[i], "bricked-regions") == 0)
+                traceMode = TraceMode::BRICKED_REGIONS;
             else if (std::strcmp(argv[i], "octree") == 0)
                 traceMode = TraceMode::OCTREE;
             else if (std::strcmp(argv[i], "octree-regions") == 0)
@@ -305,9 +301,8 @@ int main(int argc, char** argv)
 
     const char* modeLabel =
         (traceMode == TraceMode::OPTIX)    ? "optix"    :
-        (traceMode == TraceMode::BRICKED)  ? "bricked"  :
         (traceMode == TraceMode::ADAPTIVE) ? "adaptive" :
-        (traceMode == TraceMode::REGION)   ? "region"   :
+        (traceMode == TraceMode::BRICKED_REGIONS) ? "bricked-regions" :
         (traceMode == TraceMode::OCTREE)   ? "octree"   :
         (traceMode == TraceMode::OCTREE_REGIONS) ? "octree-regions" :
         (traceMode == TraceMode::NANOVDB)  ? "nanovdb" : "manual";
@@ -315,7 +310,7 @@ int main(int argc, char** argv)
     try
     {
         std::cout << "Trace mode: " << modeLabel << "\n";
-        if (traceMode == TraceMode::BRICKED)
+        if (traceMode == TraceMode::BRICKED_REGIONS)
             std::cout << "Brick size: " << brickSize << "^3 voxels, epsilon="
                       << brickEpsilon << "\n";
         if (traceMode == TraceMode::ADAPTIVE)
@@ -445,9 +440,8 @@ int main(int argc, char** argv)
         // program entry points that implement the strategy's traversal.
         std::unique_ptr<VolumeScene> volScene;
         std::unique_ptr<PlaceholderScene> placeScene;
-        std::unique_ptr<BrickedVolume> brickVol;
         std::unique_ptr<AdaptiveGridMarcher> adaptiveGrid;
-        std::unique_ptr<RegionsScene> regionsScene;
+        std::unique_ptr<BrickedRegionsScene> brickedRegionsScene;
         std::unique_ptr<OctreeVolume> octreeVol;
         std::unique_ptr<OctreeRegionsScene> ocRegionsScene;
         std::unique_ptr<NanoVDBVolume> nanovdbVol;
@@ -478,32 +472,6 @@ int main(int argc, char** argv)
                            "__raygen__rg_optix", "__miss__ms", "__closesthit__ch_vol",
                            "__intersection__is", TraceMode::OPTIX);
         }
-        else if (traceMode == TraceMode::BRICKED)
-        {
-            volScene.reset(new VolumeScene);
-            volScene->init(optixContext.context(), optixContext.stream(),
-                           make_float3(volume.originX, volume.originY, volume.originZ),
-                           make_float3(volume.maxX(), volume.maxY(), volume.maxZ()));
-            params.handle = volScene->handle();
-
-            brickVol.reset(new BrickedVolume);
-            brickVol->build(volume, tf, brickSize, scalarMin, scalarMax, brickEpsilon);
-            params.brickMeta  = brickVol->deviceMeta();
-            params.brickDims  = brickVol->brickDims();
-            params.brickCount = brickVol->brickCount();
-            params.brickSize  = brickVol->brickSize();
-
-            std::cout << "Brick grid: " << params.brickCount.x << "x"
-                      << params.brickCount.y << "x" << params.brickCount.z << " bricks, "
-                      << brickVol->numRelevantBricks() << "/" << brickVol->numBricks()
-                      << " relevant, metadata " << brickVol->metadataBytes() / 1024.0
-                      << " KiB\n";
-
-            pipeline.reset(new PipelineBase);
-            pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
-                           "__raygen__rg_optix", "__miss__ms", "__closesthit__ch_brick",
-                           "__intersection__is", TraceMode::BRICKED);
-        }
         else if (traceMode == TraceMode::ADAPTIVE)
         {
             // Single AABB GAS, identical to the OptiX-traced baseline, but the
@@ -530,24 +498,26 @@ int main(int argc, char** argv)
                            "__raygen__rg_adaptive", "__miss__ms", "__closesthit__ch",
                            nullptr, TraceMode::ADAPTIVE);
         }
-        else if (traceMode == TraceMode::REGION)
+        else if (traceMode == TraceMode::BRICKED_REGIONS)
         {
-            // One AABB primitive per non-empty brick. RT-core BVH traversal
-            // skips empty space; the raygen loops with a utility ray (depth 1)
-            // over the bricks a ray actually crosses, so numPayloadValues=4
-            // (entry/exit/prim + miss flag) and the region-specific miss program.
-            regionsScene.reset(new RegionsScene);
-            regionsScene->init(optixContext.context(), optixContext.stream(),
-                               volume, tf, brickSize, scalarMin, scalarMax, brickEpsilon);
-            params.handle      = regionsScene->handle();
-            params.regionAabbs = regionsScene->deviceAabbs();
+            // One AABB primitive per non-empty brick (bricked, but with
+            // hardware empty-skip). RT-core BVH traversal skips empty space;
+            // the raygen loops with a utility ray (depth 1) over the bricks a
+            // ray actually crosses, so numPayloadValues=4 (entry/exit/prim +
+            // miss flag) and the region-style miss program.
+            brickedRegionsScene.reset(new BrickedRegionsScene);
+            brickedRegionsScene->init(optixContext.context(), optixContext.stream(),
+                                      volume, tf, brickSize, scalarMin, scalarMax, brickEpsilon);
+            params.handle               = brickedRegionsScene->handle();
+            params.brickedRegionsAabbs  = brickedRegionsScene->deviceAabbs();
 
             pipeline.reset(new PipelineBase);
             pipeline->init(optixContext.context(), irPath ? irPath : OPTIXIR_PATH,
-                           "__raygen__rg_region", "__miss__ms_region",
-                           "__closesthit__ch_region", "__intersection__is_region",
-                           TraceMode::REGION, 4, 1);
-            std::cout << "Region scene: " << regionsScene->numRegions() << " primitives\n";
+                           "__raygen__rg_bricked_regions", "__miss__ms_region",
+                           "__closesthit__ch_bricked_regions", "__intersection__is_bricked_regions",
+                           TraceMode::BRICKED_REGIONS, 4, 1);
+            std::cout << "Bricked-regions scene: " << brickedRegionsScene->numRegions()
+                      << " primitives\n";
         }
         else if (traceMode == TraceMode::OCTREE)
         {

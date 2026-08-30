@@ -10,15 +10,16 @@
 #include <vector>
 
 // Host-side construction and GAS build of the "octree-regions" strategy
-// (--mode octree-regions, Variant AB).
+// (--mode octree-regions, Variant B of the thesis).
 //
 // It combines the hierarchical octree with the hardware-skip idea of the
-// region strategy: the octree is built (reusing OctreeVolume), and every
-// rendering-relevant leaf is emitted as a single custom AABB primitive in the
-// GAS. Empty subtrees are simply not represented, so the OptiX BVH / RT cores
-// skip them in hardware, but with a data-adaptive granularity (leaves are
-// variable-sized, unlike the fixed bricks of the region strategy). The closest
-// -hit program marches the voxel region of the hit leaf.
+// bricked-regions strategy: the octree is built (reusing OctreeVolume), and
+// every rendering-relevant leaf is emitted as a single custom AABB primitive
+// in the GAS. Empty subtrees are simply not represented, so the OptiX BVH /
+// RT cores skip them in hardware, but with a data-adaptive granularity (leaves
+// are variable-sized, unlike the fixed bricks of the bricked-regions
+// strategy). The closest-hit program marches the voxel region of the hit
+// leaf.
 class OctreeRegionsScene
 {
 public:

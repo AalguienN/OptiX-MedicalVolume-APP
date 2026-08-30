@@ -4,20 +4,6 @@
 #include <optix.h>
 #include <vector_types.h>
 
-// Per-brick metadata for the bricked / tiled strategy
-// (Section "Bricked / tiled volume" of the thesis). Each fixed-size brick
-// of n^3 voxels stores the min/max scalar value, the min/max opacity after
-// transfer-function application, and a flag telling whether the brick
-// contains any rendering-relevant voxel.
-struct BrickMeta
-{
-    float              minScalar;
-    float              maxScalar;
-    float              minOpacity;
-    float              maxOpacity;
-    unsigned int       relevant;   // 1 if maxOpacity >= epsilon
-};
-
 // Octree node for the SVO / Octree strategies (Variants A and AB). The octree
 // is used purely as a spatial acceleration structure over the dense grid:
 // each node records whether its subtree contains any rendering-relevant voxel,
@@ -48,12 +34,6 @@ struct Params
     float                  scalarMin;
     float                  scalarMax;
 
-    // Bricked strategy fields (host sets them only for TraceMode::BRICKED).
-    BrickMeta*             brickMeta;      // device array, brickCount.x*y*z
-    int3                   brickDims;      // voxels per brick per axis
-    int3                   brickCount;     // bricks per axis (ceil)
-    float3                 brickSize;      // world-space extent per brick
-
     // Adaptive-step strategy fields (host sets them only for TraceMode::ADAPTIVE).
     // distanceTex is a 3D texture holding the per-voxel Chebyshev distance (in
     // voxel units) to the nearest rendering-relevant (non-empty) voxel.
@@ -62,11 +42,12 @@ struct Params
     cudaTextureObject_t    distanceTex;
     float                  epsilon;
 
-    // Region strategy fields (host sets them only for TraceMode::REGION).
-    // regionAabbs is the per-primitive AABB array of the multi-primitive GAS;
-    // each primitive is one rendering-relevant brick, so the intersection
-    // program reads its own bounds and the closest-hit marches that brick span.
-    OptixAabb*             regionAabbs;
+    // Bricked-regions strategy fields (host sets them only for
+    // TraceMode::BRICKED_REGIONS). regionAabbs is the per-primitive AABB array
+    // of the multi-primitive GAS; each primitive is one rendering-relevant
+    // brick, so the intersection program reads its own bounds and the
+    // closest-hit marches that brick span.
+    OptixAabb*             brickedRegionsAabbs;
 
     // SVO / Octree strategy fields (host sets them only for TraceMode::OCTREE
     // / OCTREE_REGIONS). Nodes are stored in a preorder array with the root at
@@ -75,7 +56,7 @@ struct Params
     unsigned int*          octreeChild;
     unsigned int           octreeNodeCount;
 
-    // Octree-regions (Variant AB): per-primitive world AABBs of the non-empty
+    // Octree-regions (Variant B): per-primitive world AABBs of the non-empty
     // octree leaves, uploaded flat, plus the node index each primitive belongs
     // to so the closest-hit can march that leaf's voxel region.
     OptixAabb*             ocRegionAabbs;
