@@ -7,7 +7,7 @@
 
 #include "shared_device.h"
 
-enum class TraceMode { MANUAL, OPTIX };
+enum class TraceMode { MANUAL, OPTIX, ADAPTIVE, BRICKED_REGIONS, OCTREE, OCTREE_REGIONS, NANOVDB };
 
 class PipelineBase
 {
@@ -24,7 +24,9 @@ public:
               const char*        missEntry,
               const char*        closestHitEntry,
               const char*        intersectionEntry,
-              TraceMode          mode);
+              TraceMode          mode,
+              unsigned int       numPayloadValues = 3,
+              unsigned int       maxTraceDepth    = 1);
 
     OptixPipeline            pipeline() { return pipeline_; }
     OptixShaderBindingTable* sbt() { return &sbt_; }
@@ -51,4 +53,6 @@ private:
     CUdeviceptr              raygenRecord_   = 0;
     CUdeviceptr              missRecord_     = 0;
     CUdeviceptr              hitgroupRecord_ = 0;
+
+    unsigned int             maxTraceDepth_    = 1;
 };

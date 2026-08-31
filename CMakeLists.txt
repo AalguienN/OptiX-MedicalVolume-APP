@@ -15,6 +15,12 @@ endif()
 set(OPTIX_ROOT_DIR "${OPTIX_ROOT_DIR_DEFAULT}" CACHE PATH "OptiX SDK root directory")
 set(OPTIX_INCLUDE_DIR "${OPTIX_ROOT_DIR}/include")
 
+# Header-only NanoVDB library (part of the OpenVDB project). Only the headers
+# are needed; the NanoVDB CUDA traversal, GridBuilder and CreateNanoGrid tools
+# are all header-only and depend on nothing else.
+set(NANOVDB_INCLUDE "$ENV{HOME}/nvidia/nanovdb/openvdb/nanovdb" CACHE PATH "NanoVDB header root directory")
+set(NANOVDB_INCLUDE_DIR "${NANOVDB_INCLUDE}")
+
 find_package(CUDA REQUIRED)
 
 if(WIN32 AND NOT glfw3_DIR AND EXISTS "${OPTIX_ROOT_DIR}/lib/cmake/glfw3")
