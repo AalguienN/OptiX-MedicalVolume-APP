@@ -21,13 +21,23 @@ function(add_optix_ir_target output_var source_file)
     get_filename_component(_src_dir "${source_file}" DIRECTORY)
     file(GLOB _device_deps "${_src_dir}/*.cu" "${_src_dir}/*.h" "${_src_dir}/*.hpp")
 
+    if(MSVC)
+        # NanoVDB (v11+) headers pull in CCCL/cuda_std, which require the
+        # standard-conforming MSVC preprocessor and a C++17 standard.
+        # These are MSVC-specific; the Linux nvcc invocation is left unchanged.
+        set(_std_flag -std=c++17)
+        set(_host_flags -Xcompiler "/Zc:preprocessor")
+    endif()
+
     add_custom_command(
         OUTPUT "${_output}"
         COMMAND ${CUDA_NVCC_EXECUTABLE}
             --optix-ir
             -arch=${CUDA_ARCH}
+            ${_std_flag}
             -I${OPTIX_INCLUDE_DIR}
             ${_extra_includes}
+            ${_host_flags}
             -o "${_output}"
             "${source_file}"
         DEPENDS "${source_file}" ${_device_deps}
