@@ -49,15 +49,13 @@ public:
     void init(cudaStream_t stream, const char* logPath = nullptr, unsigned int windowFrames = 120);
 
     // Enable per-frame traversal-counter logging (the dbgCounters device
-    // array of 5 unsigned ints used by the renderers, see shared_device.h).
+    // array of 4 unsigned ints used by the renderers, see shared_device.h).
     // dCounters is reset to zero on the GPU at each frame start and
     // snapshotted to host memory right before that frame's end event, so the
-    // readback is ordered on the stream without a host/GPU sync. interval and
-    // bounds select, independently, whether the corresponding skip-ratio
-    // column pair is appended to the CSV:
-    //   interval -> vol_samples..total_steps_interval,skip_ratio_interval
-    //   bounds   -> vol_samples..total_steps_bounds,skip_ratio_bounds
-    void enablePerFrameCounters(unsigned int* dCounters, bool interval, bool bounds);
+    // readback is ordered on the stream without a host/GPU sync. When enabled
+    // (logBounds == true), the skip-ratio column pair is appended to the CSV:
+    //   vol_samples..total_steps_bounds,skip_ratio_bounds
+    void enablePerFrameCounters(unsigned int* dCounters, bool logBounds);
 
     // Record a start timestamp immediately before the caller's OptiX
     // launch on the configured stream.
@@ -106,7 +104,7 @@ public:
 
 private:
     static constexpr unsigned int kEventPoolSize = 32;
-    static constexpr unsigned int kNumCounters   = 5;
+    static constexpr unsigned int kNumCounters   = 4;
 
     struct FrameSlot
     {
@@ -146,7 +144,6 @@ private:
     std::string                    logPath_;
     bool                           headerWritten_ = true;   // false => emit header on first row
 
-    unsigned int*                  dCounters_     = nullptr; // device counters (5 x uint)
-    bool                           logInterval_   = false;   // skip_ratio_interval columns
+    unsigned int*                  dCounters_     = nullptr; // device counters (4 x uint)
     bool                           logBounds_     = false;   // skip_ratio_bounds columns
 };

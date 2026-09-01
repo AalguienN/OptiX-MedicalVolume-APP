@@ -68,12 +68,7 @@ static __device__ float3 nanovdbMarch(float3 worig, float3 wdir, float tmin, flo
     if (maxSteps > 4096) maxSteps = 4096;
 
     if (params.dbgCounters)
-    {
-        // [3] interval and [4] bounds coincide for NanoVDB: it marches the full
-        // volume span, so the would-be fixed-step count is the same either way.
         atomicAdd(&params.dbgCounters[3], static_cast<unsigned int>(maxSteps));
-        atomicAdd(&params.dbgCounters[4], static_cast<unsigned int>(maxSteps));
-    }
 
     const float tEnd = tmax;
     float t = tmin;

@@ -72,11 +72,10 @@ void MetricsCollector::init(cudaStream_t stream, const char* logPath, unsigned i
     }
 }
 
-void MetricsCollector::enablePerFrameCounters(unsigned int* dCounters, bool interval, bool bounds)
+void MetricsCollector::enablePerFrameCounters(unsigned int* dCounters, bool logBounds)
 {
     dCounters_   = dCounters;
-    logInterval_ = interval;
-    logBounds_   = bounds;
+    logBounds_   = logBounds;
 }
 
 void MetricsCollector::beginFrame()
@@ -144,7 +143,7 @@ void MetricsCollector::advanceResultQueue()
         readIndex_ = (readIndex_ + 1) % kEventPoolSize;
 
         finalizeFrame(static_cast<double>(elapsedMs),
-                      (dCounters_ && (logInterval_ || logBounds_)) ? slot.counts : nullptr);
+                      (dCounters_ && logBounds_) ? slot.counts : nullptr);
     }
 }
 
@@ -181,17 +180,11 @@ void MetricsCollector::finalizeFrame(double renderMs, const unsigned int* counts
         if (counts)
         {
             const unsigned int samples = counts[0];
-            if (logInterval_)
+            if (logBounds_)
             {
                 std::fprintf(logFile_, ",%u,%u,%u,%u,%.6f",
                              counts[0], counts[1], counts[2], counts[3],
                              skipRatio(samples, counts[3]));
-            }
-            if (logBounds_)
-            {
-                std::fprintf(logFile_, ",%u,%u,%u,%u,%.6f",
-                             counts[0], counts[1], counts[2], counts[4],
-                             skipRatio(samples, counts[4]));
             }
         }
         std::fprintf(logFile_, "\n");
@@ -204,8 +197,6 @@ void MetricsCollector::writeCsvHeader()
     if (!logFile_)
         return;
     std::fprintf(logFile_, "frame,render_ms,fps,latency_ms");
-    if (logInterval_)
-        std::fprintf(logFile_, ",vol_samples,dist_reads,leaps,total_steps_interval,skip_ratio_interval");
     if (logBounds_)
         std::fprintf(logFile_, ",vol_samples,dist_reads,leaps,total_steps_bounds,skip_ratio_bounds");
     std::fprintf(logFile_, "\n");
@@ -253,7 +244,7 @@ void MetricsCollector::flush()
         readIndex_ = (readIndex_ + 1) % kEventPoolSize;
 
         finalizeFrame(static_cast<double>(elapsedMs),
-                      (dCounters_ && (logInterval_ || logBounds_)) ? slot.counts : nullptr);
+                      (dCounters_ && logBounds_) ? slot.counts : nullptr);
     }
 }
 

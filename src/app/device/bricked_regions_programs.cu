@@ -57,13 +57,13 @@ extern "C" __global__ void __raygen__rg_bricked_regions()
         {
             t_cur = fmaxf(0.0f, v0);
 
-            // total_steps_bounds ([4]): steps over the full volume AABB span
+            // total_steps_bounds ([3]): steps over the full volume AABB span
             // for this ray, counted once here (before any empty-space skip).
             float vmin = fmaxf(0.0f, v0), vmax = v1;
             int bSteps = static_cast<int>((vmax - vmin) / stepSize) + 1;
             if (bSteps > 4096) bSteps = 4096;
             if (params.dbgCounters)
-                atomicAdd(&params.dbgCounters[4], static_cast<unsigned int>(bSteps));
+                atomicAdd(&params.dbgCounters[3], static_cast<unsigned int>(bSteps));
         }
     }
 

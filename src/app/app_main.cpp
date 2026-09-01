@@ -94,11 +94,9 @@ void printUsage(const char* prog) {
                << "                     octree-regions strategies (default off)\n"
                 << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
                 << "  --window <n>       FPS observation window in frames (default 120)\n"
-                << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n"
-                << "  --dbg-counter-interval  Log per-frame skip_ratio_interval columns to CSV\n"
-                << "                     (fraction of the reached span skipped; default off)\n"
-                << "  --dbg-counter-bounds    Log per-frame skip_ratio_bounds columns to CSV\n"
-                << "                     (fraction of the volume-bounds avoided; default off)\n"
+<< "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n"
+                 << "  --dbg-counter-bounds    Log per-frame skip_ratio_bounds columns to CSV\n"
+                 << "                     (fraction of the volume-bounds avoided; default off)\n"
                 << "  --nanovdb-sampler <nearest|trilinear>  NanoVDB interpolation (default nearest)\n"
                << "  --snapshot <path>  Write the last rendered frame to <path> as a PPM image\n";
 }
@@ -230,7 +228,6 @@ int main(int argc, char** argv)
     unsigned int maxFrames = 0;     // 0 = run until window closes
     bool nanovdbNearest = false;    // 1 = nearest, 0 = trilinear (NanoVDB, default)
     bool adaptiveMarch = false;     // adaptive-step inner march in region strategies
-    bool dbgCounterInterval = false; // log per-frame skip_ratio_interval to CSV
     bool dbgCounterBounds = false;   // log per-frame skip_ratio_bounds to CSV
 
     for (int i = 2; i < argc; ++i)
@@ -286,10 +283,6 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
         {
             maxFrames = static_cast<unsigned int>(std::strtoul(argv[++i], nullptr, 10));
-        }
-        else if (std::strcmp(argv[i], "--dbg-counter-interval") == 0)
-        {
-            dbgCounterInterval = true;
         }
         else if (std::strcmp(argv[i], "--dbg-counter-bounds") == 0)
         {
@@ -676,15 +669,15 @@ int main(int argc, char** argv)
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params), sizeof(Params)));
 
         // Diagnostic sample counters (volume samples, distance-map reads,
-        // leaps, total-steps interval, total-steps bounds) so the traversal
-        // cost and skip ratio of each strategy can be compared.
+        // leaps, total-steps bounds) so the traversal cost and skip ratio of
+        // each strategy can be compared.
         unsigned int* d_dbgCounters = nullptr;
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_dbgCounters), sizeof(unsigned int) * 5));
-        CUDA_CHECK(cudaMemset(d_dbgCounters, 0, sizeof(unsigned int) * 5));
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_dbgCounters), sizeof(unsigned int) * 4));
+        CUDA_CHECK(cudaMemset(d_dbgCounters, 0, sizeof(unsigned int) * 4));
         params.dbgCounters = d_dbgCounters;
 
-        // Wire the per-frame counter CSV logging (opt-in via flags).
-        metrics.enablePerFrameCounters(d_dbgCounters, dbgCounterInterval, dbgCounterBounds);
+        // Wire the per-frame counter CSV logging (opt-in via flag).
+        metrics.enablePerFrameCounters(d_dbgCounters, dbgCounterBounds);
 
         metrics.recordGpuMemory();
 
@@ -697,20 +690,17 @@ int main(int argc, char** argv)
         printMetricsSummary(metrics, modeLabel);
 
         {
-            unsigned int dbg[5] = { 0, 0, 0, 0, 0 };
-            CUDA_CHECK(cudaMemcpy(dbg, d_dbgCounters, sizeof(unsigned int) * 5,
+            unsigned int dbg[4] = { 0, 0, 0, 0 };
+            CUDA_CHECK(cudaMemcpy(dbg, d_dbgCounters, sizeof(unsigned int) * 4,
                                   cudaMemcpyDeviceToHost));
-            const unsigned int denomI = dbg[0] > dbg[3] ? dbg[0] : dbg[3];
-            const unsigned int denomB = dbg[0] > dbg[4] ? dbg[0] : dbg[4];
-            const double ratioI = denomI ? 1.0 - static_cast<double>(dbg[0]) / denomI : 0.0;
-            const double ratioB = denomB ? 1.0 - static_cast<double>(dbg[0]) / denomB : 0.0;
+            const unsigned int denom = dbg[0] > dbg[3] ? dbg[0] : dbg[3];
+            const double ratio = denom ? 1.0 - static_cast<double>(dbg[0]) / denom : 0.0;
             std::cout << "  traversal : " << dbg[0] << " vol-samples, " << dbg[1]
                       << " dist-reads, " << dbg[2] << " leaps, " << dbg[3]
-                      << " interval-steps, " << dbg[4] << " bounds-steps (per frame: "
+                      << " bounds-steps (per frame: "
                       << dbg[0] << " samples, " << dbg[1] << " reads, " << dbg[2]
-                      << " leaps, " << dbg[3] << " interval-steps, " << dbg[4]
-                      << " bounds-steps)\n"
-                      << "  skip ratio : interval=" << ratioI << "  bounds=" << ratioB << "\n";
+                      << " leaps, " << dbg[3] << " bounds-steps)\n"
+                      << "  skip ratio : bounds=" << ratio << "\n";
         }
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_dbgCounters)));
 

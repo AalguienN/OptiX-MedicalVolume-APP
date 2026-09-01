@@ -148,7 +148,7 @@ extern "C" __global__ void __closesthit__ch_octree()
     float tmin = __uint_as_float(optixGetAttribute_0());
     float tmax = __uint_as_float(optixGetAttribute_1());
 
-    // total_steps_bounds ([4]): steps over the full volume AABB span for this
+    // total_steps_bounds ([3]): steps over the full volume AABB span for this
     // ray, counted once here (before any empty-subtree skip).
     {
         float stepSize = fminf(params.volumeSpacing.x,
@@ -156,7 +156,7 @@ extern "C" __global__ void __closesthit__ch_octree()
         int bSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
         if (bSteps > 4096) bSteps = 4096;
         if (params.dbgCounters)
-            atomicAdd(&params.dbgCounters[4], static_cast<unsigned int>(bSteps));
+            atomicAdd(&params.dbgCounters[3], static_cast<unsigned int>(bSteps));
     }
 
     float3 color = octreeTraverse(optixGetWorldRayOrigin(), optixGetWorldRayDirection(),
