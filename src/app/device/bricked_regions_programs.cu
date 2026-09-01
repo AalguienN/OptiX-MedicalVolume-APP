@@ -54,9 +54,20 @@ extern "C" __global__ void __raygen__rg_bricked_regions()
     {
         float v0, v1;
         if (intersectAABB(origin, direction, params.volumeOrigin, params.volumeMax, v0, v1))
+        {
             t_cur = fmaxf(0.0f, v0);
+
+            // total_steps_bounds ([4]): steps over the full volume AABB span
+            // for this ray, counted once here (before any empty-space skip).
+            float vmin = fmaxf(0.0f, v0), vmax = v1;
+            int bSteps = static_cast<int>((vmax - vmin) / stepSize) + 1;
+            if (bSteps > 4096) bSteps = 4096;
+            if (params.dbgCounters)
+                atomicAdd(&params.dbgCounters[4], static_cast<unsigned int>(bSteps));
+        }
     }
 
+    unsigned int nRegionSkips = 0;
     for (int hops = 0; hops < 256 && accumA < 0.99f; ++hops)
     {
         unsigned int p0 = 0u, p1 = 0u, p2 = 0u;  // [entry t, exit t, prim index]
@@ -73,7 +84,7 @@ extern "C" __global__ void __raygen__rg_bricked_regions()
                    0,
                    1,
                    0,
-                    p0, p1, p2, missFlag);
+                   p0, p1, p2, missFlag);
 
         if (missFlag == 1u)   // miss: no more non-empty bricks along the ray
             break;
@@ -83,6 +94,10 @@ extern "C" __global__ void __raygen__rg_bricked_regions()
 
         if (tHit >= 1e29f)
             break;
+
+        // Each found non-empty brick means the hardware BVH skipped the empty
+        // region preceding it, so count it as a leap (empty-region skip).
+        ++nRegionSkips;
 
         regionMarch(origin, direction, tHit, tExit, stepSize,
                     accumR, accumG, accumB, accumA);
@@ -100,6 +115,9 @@ extern "C" __global__ void __raygen__rg_bricked_regions()
             advance = tExit + stepSize;
         t_cur = fminf(advance, 1e30f);
     }
+
+    if (params.dbgCounters)
+        atomicAdd(&params.dbgCounters[2], nRegionSkips);
 
     float3 color = make_float3(accumR, accumG, accumB);
     params.image[idx.y * params.image_width + idx.x] = make_color(color);

@@ -75,9 +75,17 @@ struct Params
     const void*            nanovdbGrid;
     unsigned int           nanovdbNearest;
 
-    // Optional per-frame diagnostic counters (device, 3 x unsigned int):
-    // [0] = volume samples, [1] = distance-map reads, [2] = leaps. Null to
-    // disable. Only incremented by the manual marchers for performance analysis.
+    // Optional per-frame diagnostic counters (device, 5 x unsigned int):
+    // [0] = volume samples (actual voxels visited)
+    // [1] = distance-map reads
+    // [2] = leaps (empty-region / node / subtree skips)
+    // [3] = total_steps_interval (steps over the span(s) actually marched)
+    // [4] = total_steps_bounds   (steps over the full volume AABB span, no
+    //                             early termination; counted once per ray)
+    // Null to disable. Only incremented by the device marchers for traversal
+    // cost analysis. The two derived skip ratios are:
+    //   skip_ratio_interval = 1 - [0]/[3]
+    //   skip_ratio_bounds   = 1 - [0]/[4]
     unsigned int*          dbgCounters;
 };
 

@@ -99,7 +99,10 @@ static __forceinline__ __device__ float3 octreeTraverse(
             unsigned int cidx = params.octreeChild[node.childOffset + k];
             OctreeNode child = octreeNodeAt(cidx);
             if (!child.relevant)
+            {
+                ++nLeaps;     // empty subtree skipped in one step
                 continue;
+            }
 
             octreeNodeWorldBounds(child, bmin, bmax);
             float ct0, ct1;
@@ -144,6 +147,17 @@ extern "C" __global__ void __closesthit__ch_octree()
 {
     float tmin = __uint_as_float(optixGetAttribute_0());
     float tmax = __uint_as_float(optixGetAttribute_1());
+
+    // total_steps_bounds ([4]): steps over the full volume AABB span for this
+    // ray, counted once here (before any empty-subtree skip).
+    {
+        float stepSize = fminf(params.volumeSpacing.x,
+                       fminf(params.volumeSpacing.y, params.volumeSpacing.z)) * 0.5f;
+        int bSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
+        if (bSteps > 4096) bSteps = 4096;
+        if (params.dbgCounters)
+            atomicAdd(&params.dbgCounters[4], static_cast<unsigned int>(bSteps));
+    }
 
     float3 color = octreeTraverse(optixGetWorldRayOrigin(), optixGetWorldRayDirection(),
                                   tmin, tmax);
