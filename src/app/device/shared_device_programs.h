@@ -102,6 +102,16 @@ static __forceinline__ __device__ float3 volumeMarch(float3 origin, float3 direc
     int maxSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
     if (maxSteps > 4096) maxSteps = 4096;
 
+    // total_steps_bounds ([3]): the steps the dense baseline would take over
+    // the marched span before any early termination. For the dense baseline
+    // this span is the full volume; it is accumulated once per ray here,
+    // keeping the skip ratio at ~0.
+    {
+        unsigned int totalSteps = static_cast<unsigned int>(maxSteps);
+        if (params.dbgCounters)
+            atomicAdd(&params.dbgCounters[3], totalSteps);
+    }
+
     for (int i = 0; i < maxSteps && accumA < 0.99f; ++i)
     {
         float t = tmin + i * stepSize;

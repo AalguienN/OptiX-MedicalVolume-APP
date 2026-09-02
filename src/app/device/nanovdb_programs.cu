@@ -67,6 +67,9 @@ static __device__ float3 nanovdbMarch(float3 worig, float3 wdir, float tmin, flo
     int maxSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
     if (maxSteps > 4096) maxSteps = 4096;
 
+    if (params.dbgCounters)
+        atomicAdd(&params.dbgCounters[3], static_cast<unsigned int>(maxSteps));
+
     const float tEnd = tmax;
     float t = tmin;
     float tLeafExit = -1.0f;  // world t past which the current leaf run ends

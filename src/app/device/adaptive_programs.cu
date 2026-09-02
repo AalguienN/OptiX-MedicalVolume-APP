@@ -143,7 +143,7 @@ static __forceinline__ __device__ void spanMarchFixed(
     }
 
     if (params.dbgCounters)
-        atomicAdd(&params.dbgCounters[0], nSamples);
+        atomicAdd(&params.dbgCounters[0], nSamples);   // actually-sampled voxels
 }
 
 // Adaptive-step seedable span march: same span semantics as spanMarchFixed but
@@ -245,6 +245,18 @@ extern "C" __global__ void __raygen__rg_adaptive()
     if (intersectAABB(origin, direction, params.volumeOrigin, params.volumeMax, tmin, tmax))
     {
         if (tmin < 0.0f) tmin = 0.0f;
+
+        // total_steps_bounds ([3]): steps over the full volume AABB span for
+        // this ray, counted once here (before any early termination / skip).
+        {
+            float stepSize = fminf(params.volumeSpacing.x,
+                           fminf(params.volumeSpacing.y, params.volumeSpacing.z)) * 0.5f;
+            int bSteps = static_cast<int>((tmax - tmin) / stepSize) + 1;
+            if (bSteps > 4096) bSteps = 4096;
+            if (params.dbgCounters)
+                atomicAdd(&params.dbgCounters[3], static_cast<unsigned int>(bSteps));
+        }
+
         color = adaptiveMarch(origin, direction, tmin, tmax);
     }
 

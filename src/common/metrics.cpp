@@ -63,15 +63,19 @@ void MetricsCollector::init(cudaStream_t stream, const char* logPath, unsigned i
         logFile_ = std::fopen(logPath, "a");
         if (logFile_)
         {
-            // Write a header if the file is empty (i.e. this is the first run).
+            // Write a header on the first row if the file is empty (i.e. this
+            // is the first run); deferred so that enablePerFrameCounters() can
+            // add its columns before the header is emitted.
             std::fseek(logFile_, 0, SEEK_END);
-            if (std::ftell(logFile_) == 0)
-            {
-                std::fprintf(logFile_, "frame,render_ms,fps,latency_ms\n");
-                std::fflush(logFile_);
-            }
+            headerWritten_ = (std::ftell(logFile_) != 0);
         }
     }
+}
+
+void MetricsCollector::enablePerFrameCounters(unsigned int* dCounters, bool logBounds)
+{
+    dCounters_   = dCounters;
+    logBounds_   = logBounds;
 }
 
 void MetricsCollector::beginFrame()
@@ -84,6 +88,12 @@ void MetricsCollector::beginFrame()
     FrameSlot& slot = pool_[writeIndex_ % kEventPoolSize];
     if (slot.used)
         readIndex_ = (readIndex_ + 1) % kEventPoolSize;
+
+    // Reset this frame's diagnostics on the GPU before the launch runs.
+    // Ordered on the same stream, so it never races the previous frame's
+    // counter snapshot (memcpy) issued in endFrame().
+    if (dCounters_)
+        CUDA_CHECK(cudaMemsetAsync(dCounters_, 0, sizeof(unsigned int) * kNumCounters, stream_));
 
     CUDA_CHECK(cudaEventRecord(slot.start, stream_));
     slot.used = true;
@@ -98,6 +108,15 @@ void MetricsCollector::endFrame()
     // Timestamp the end of this frame's launch. The most recently recorded
     // start corresponds to the slot just before the current write position.
     FrameSlot& slot = pool_[(writeIndex_ + kEventPoolSize - 1) % kEventPoolSize];
+
+    // Snapshot this frame's diagnostics into the slot before recording the
+    // end event: on the same stream and before slot.end, so the copy is known
+    // complete once cudaEventQuery(slot.end) succeeds in advanceResultQueue().
+    if (dCounters_ && slot.used)
+        CUDA_CHECK(cudaMemcpyAsync(slot.counts, dCounters_,
+                                   sizeof(unsigned int) * kNumCounters,
+                                   cudaMemcpyDeviceToHost, stream_));
+
     CUDA_CHECK(cudaEventRecord(slot.end, stream_));
 
     advanceResultQueue();
@@ -127,11 +146,12 @@ void MetricsCollector::advanceResultQueue()
         slot.used = false;
         readIndex_ = (readIndex_ + 1) % kEventPoolSize;
 
-        finalizeFrame(static_cast<double>(elapsedMs));
+        finalizeFrame(static_cast<double>(elapsedMs),
+                      (dCounters_ && logBounds_) ? slot.counts : nullptr);
     }
 }
 
-void MetricsCollector::finalizeFrame(double renderMs)
+void MetricsCollector::finalizeFrame(double renderMs, const unsigned int* counts)
 {
     renderTimesMs_.push_back(renderMs);
     latestRenderMs_ = renderMs;
@@ -153,10 +173,48 @@ void MetricsCollector::finalizeFrame(double renderMs)
 
     if (logFile_)
     {
-        std::fprintf(logFile_, "%u,%.3f,%.3f,%.3f\n",
+        if (!headerWritten_)
+        {
+            writeCsvHeader();
+            headerWritten_ = true;
+        }
+
+        std::fprintf(logFile_, "%u,%.3f,%.3f,%.3f",
                      numFramesRecorded(), renderMs, latestFps_, latencyMs);
+        if (counts)
+        {
+            const unsigned int samples = counts[0];
+            if (logBounds_)
+            {
+                std::fprintf(logFile_, ",%u,%u,%u,%u,%.6f",
+                             counts[0], counts[1], counts[2], counts[3],
+                             skipRatio(samples, counts[3]));
+            }
+        }
+        std::fprintf(logFile_, "\n");
         std::fflush(logFile_);
     }
+}
+
+void MetricsCollector::writeCsvHeader()
+{
+    if (!logFile_)
+        return;
+    std::fprintf(logFile_, "frame,render_ms,fps,latency_ms");
+    if (logBounds_)
+        std::fprintf(logFile_, ",vol_samples,dist_reads,leaps,total_steps_bounds,skip_ratio_bounds");
+    std::fprintf(logFile_, "\n");
+}
+
+double MetricsCollector::skipRatio(unsigned int samples, unsigned int totalSteps)
+{
+    // skip_ratio = 1 - samples/total_steps, clamp the denominator to avoid
+    // division by zero and cap the result to [0,1] for degenerate counters.
+    const unsigned int denom = samples > totalSteps ? samples : totalSteps;
+    if (denom == 0)
+        return 0.0;
+    double ratio = 1.0 - static_cast<double>(samples) / static_cast<double>(denom);
+    return ratio < 0.0 ? 0.0 : (ratio > 1.0 ? 1.0 : ratio);
 }
 
 void MetricsCollector::onInputEvent()
@@ -189,7 +247,8 @@ void MetricsCollector::flush()
         slot.used = false;
         readIndex_ = (readIndex_ + 1) % kEventPoolSize;
 
-        finalizeFrame(static_cast<double>(elapsedMs));
+        finalizeFrame(static_cast<double>(elapsedMs),
+                      (dCounters_ && logBounds_) ? slot.counts : nullptr);
     }
 }
 
