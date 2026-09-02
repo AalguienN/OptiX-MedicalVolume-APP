@@ -12,7 +12,7 @@
 
 namespace {
 
-void skipElement(std::ifstream& f, uint16_t endElem)
+void skipElement(std::ifstream& f, uint16_t endElem, bool explicitVR)
 {
     while (true)
     {
@@ -32,36 +32,44 @@ void skipElement(std::ifstream& f, uint16_t endElem)
             if (e == 0xE000)
             {
                 if (len == 0xFFFFFFFF)
-                    skipElement(f, 0xE00D);
+                    skipElement(f, 0xE00D, explicitVR);
                 else if (len > 0)
                     f.seekg(len, std::ios::cur);
             }
         }
         else
         {
-            char vrRaw[2];
-            f.read(vrRaw, 2);
             uint32_t len = 0;
-            if (std::memchr("OBOWOFSQUCUNURUT", vrRaw[0], 16) &&
-                std::memchr("BFWQCNRT", vrRaw[1], 8) &&
-                ((vrRaw[0] == 'O' && (vrRaw[1] == 'B' || vrRaw[1] == 'W' || vrRaw[1] == 'F')) ||
-                 (vrRaw[0] == 'S' && vrRaw[1] == 'Q') ||
-                 (vrRaw[0] == 'U' && (vrRaw[1] == 'C' || vrRaw[1] == 'N')) ||
-                 (vrRaw[0] == 'U' && vrRaw[1] == 'R') ||
-                 (vrRaw[0] == 'U' && vrRaw[1] == 'T')))
+            if (explicitVR)
             {
-                f.seekg(2, std::ios::cur);
-                f.read(reinterpret_cast<char*>(&len), 4);
+                char vrRaw[2];
+                f.read(vrRaw, 2);
+                if (std::memchr("OBOWOFSQUCUNURUT", vrRaw[0], 16) &&
+                    std::memchr("BFWQCNRT", vrRaw[1], 8) &&
+                    ((vrRaw[0] == 'O' && (vrRaw[1] == 'B' || vrRaw[1] == 'W' || vrRaw[1] == 'F')) ||
+                     (vrRaw[0] == 'S' && vrRaw[1] == 'Q') ||
+                     (vrRaw[0] == 'U' && (vrRaw[1] == 'C' || vrRaw[1] == 'N')) ||
+                     (vrRaw[0] == 'U' && vrRaw[1] == 'R') ||
+                     (vrRaw[0] == 'U' && vrRaw[1] == 'T')))
+                {
+                    f.seekg(2, std::ios::cur);
+                    f.read(reinterpret_cast<char*>(&len), 4);
+                }
+                else
+                {
+                    uint16_t len16 = 0;
+                    f.read(reinterpret_cast<char*>(&len16), 2);
+                    len = len16;
+                }
             }
             else
             {
-                uint16_t len16 = 0;
-                f.read(reinterpret_cast<char*>(&len16), 2);
-                len = len16;
+                // Implicit VR Little Endian: every element has a 32-bit length.
+                f.read(reinterpret_cast<char*>(&len), 4);
             }
 
             if (len == 0xFFFFFFFF)
-                skipElement(f, 0xE0DD);
+                skipElement(f, 0xE0DD, explicitVR);
             else if (len > 0 && len < 0x7FFFFFFF)
                 f.seekg(len, std::ios::cur);
         }
@@ -135,6 +143,61 @@ DicomSeries loadDicomSeries(const std::string& seriesPath)
 
         bool foundPixelData = false;
 
+        // The File Meta Group (group 0x0002) is always Explicit VR even in
+        // Implicit VR Little Endian datasets. Scan it first to learn the
+        // Transfer Syntax UID (0002,0010) and decide how to parse the dataset.
+        bool explicitVR = true;
+        while (f.good())
+        {
+            char tagBuf[4];
+            f.read(tagBuf, 4);
+            if (f.gcount() < 4) break;
+
+            uint16_t group, elem;
+            std::memcpy(&group, tagBuf, 2);
+            std::memcpy(&elem, tagBuf + 2, 2);
+
+            if (group != 0x0002)
+            {
+                // Reached the dataset proper; restore the tag for dataset loop.
+                f.seekg(-4, std::ios::cur);
+                break;
+            }
+
+            char vrRaw[2];
+            f.read(vrRaw, 2);
+            char vr[3] = {vrRaw[0], vrRaw[1], '\0'};
+
+            uint32_t dataLen = 0;
+            if (isSpecialVR(vr))
+            {
+                char reserved[2];
+                f.read(reserved, 2);
+                f.read(reinterpret_cast<char*>(&dataLen), 4);
+            }
+            else
+            {
+                uint16_t len16 = 0;
+                f.read(reinterpret_cast<char*>(&len16), 2);
+                dataLen = len16;
+            }
+
+            if (elem == 0x0010 && dataLen > 0 && dataLen < 0x7FFFFFFF)
+            {
+                std::vector<char> buf(dataLen);
+                f.read(buf.data(), dataLen);
+                std::string uid(buf.data(), dataLen);
+                while (!uid.empty() && (uid.back() == '\0' || uid.back() == ' '))
+                    uid.pop_back();
+                // Implicit VR Little Endian transfer syntax.
+                explicitVR = (uid != "1.2.840.10008.1.2");
+            }
+            else if (dataLen > 0 && dataLen < 0x7FFFFFFF)
+            {
+                f.seekg(dataLen, std::ios::cur);
+            }
+        }
+
         while (f.good())
         {
             char tagBuf[4];
@@ -147,25 +210,18 @@ DicomSeries loadDicomSeries(const std::string& seriesPath)
 
             if (group == 0x7FE0 && elem == 0x0010)
             {
-                char vrCheck[2];
-                f.read(vrCheck, 2);
-                bool isExplicitVR = (vrCheck[0] == 'O' && (vrCheck[1] == 'B' || vrCheck[1] == 'W' ||
-                                     vrCheck[1] == 'F')) ||
-                                    (vrCheck[0] == 'U' && vrCheck[1] == 'N');
-
                 uint32_t pixelLen = 0;
-                if (isExplicitVR)
+                if (explicitVR)
                 {
+                    char vrCheck[2];
+                    f.read(vrCheck, 2);
                     char reserved[2];
                     f.read(reserved, 2);
                     f.read(reinterpret_cast<char*>(&pixelLen), 4);
                 }
                 else
                 {
-                    uint32_t len16or32 = 0;
-                    std::memcpy(&len16or32, vrCheck, 2);
-                    f.read(reinterpret_cast<char*>(&len16or32) + 2, 2);
-                    pixelLen = len16or32;
+                    f.read(reinterpret_cast<char*>(&pixelLen), 4);
                 }
 
                 if (pixelLen > 0 && pixelLen < 0x7FFFFFFF)
@@ -195,28 +251,34 @@ DicomSeries loadDicomSeries(const std::string& seriesPath)
                 continue;
             }
 
-            char vrRaw[2];
-            f.read(vrRaw, 2);
-
-            char vr[3] = {vrRaw[0], vrRaw[1], '\0'};
-
             uint32_t dataLen = 0;
-            if (isSpecialVR(vr))
+            if (explicitVR)
             {
-                char reserved[2];
-                f.read(reserved, 2);
-                f.read(reinterpret_cast<char*>(&dataLen), 4);
+                char vrRaw[2];
+                f.read(vrRaw, 2);
+                char vr[3] = {vrRaw[0], vrRaw[1], '\0'};
+                if (isSpecialVR(vr))
+                {
+                    char reserved[2];
+                    f.read(reserved, 2);
+                    f.read(reinterpret_cast<char*>(&dataLen), 4);
+                }
+                else
+                {
+                    uint16_t len16 = 0;
+                    f.read(reinterpret_cast<char*>(&len16), 2);
+                    dataLen = len16;
+                }
             }
             else
             {
-                uint16_t len16 = 0;
-                f.read(reinterpret_cast<char*>(&len16), 2);
-                dataLen = len16;
+                // Implicit VR Little Endian: every element has a 32-bit length.
+                f.read(reinterpret_cast<char*>(&dataLen), 4);
             }
 
             if (dataLen == 0xFFFFFFFF)
             {
-                skipElement(f, 0xE0DD);
+                skipElement(f, 0xE0DD, explicitVR);
                 continue;
             }
 

@@ -1,0 +1,93 @@
+TCIA dataset compilation results
+================================
+Tested with: ./build/bin/optix_app <series_dir> --frames 5
+Test date: 2026-09-02  (updated after implicit-VR support)
+
+Total series tested : 47
+That load correctly : 47
+That FAIL to load  : 0
+
+
+--------------------------------------------------------------------
+DATASETS THAT LOAD CORRECTLY (47)
+--------------------------------------------------------------------
+manifest-1787673532591_DICOM/series_1
+manifest-1787673532591_DICOM/series_2
+manifest-1787673532591_DICOM/series_3
+manifest-1787673532591_DICOM/series_4
+manifest-1787681973389_DICOM/series_1
+manifest-1787681973389_DICOM/series_2
+manifest-1787681973389_DICOM/series_3
+manifest-1787681973389_DICOM/series_4
+manifest-1787683033169_DICOM/series_1
+manifest-1787683033169_DICOM/series_2
+manifest-1787683033169_DICOM/series_3
+manifest-1787683033169_DICOM/series_4
+manifest-1787683033169_DICOM/series_5
+manifest-1788373825860_DICOM/series_1
+manifest-1788373825860_DICOM/series_2
+manifest-1788373825860_DICOM/series_3
+manifest-1788373825860_DICOM/series_4
+manifest-1788373825860_DICOM/series_5
+manifest-1788373825860_DICOM/series_6
+manifest-1788373825860_DICOM/series_7
+manifest-1788373825860_DICOM/series_8
+manifest-1788373825860_DICOM/series_9
+manifest-1788373825860_DICOM/series_10
+manifest-1788373825860_DICOM/series_11
+manifest-1788373825860_DICOM/series_12
+manifest-1788381293866_DICOM/series_1
+manifest-1788381293866_DICOM/series_2
+manifest-1788381293866_DICOM/series_3
+manifest-1788381293866_DICOM/series_4
+manifest-1788381293866_DICOM/series_5
+manifest-1788381293866_DICOM/series_6
+manifest-1788381293866_DICOM/series_7
+manifest-1788381293866_DICOM/series_8
+manifest-1788381293866_DICOM/series_9
+manifest-1788381293866_DICOM/series_10
+manifest-1788381992720_DICOM/series_1
+manifest-1788381992720_DICOM/series_2
+manifest-1788381992720_DICOM/series_3
+manifest-1788381992720_DICOM/series_4
+manifest-1788381992720_DICOM/series_5
+manifest-1788381992720_DICOM/series_6
+manifest-1788381992720_DICOM/series_7
+manifest-1788381992720_DICOM/series_8
+manifest-1788381992720_DICOM/series_9
+manifest-1788381992720_DICOM/series_10
+manifest-1788381992720_DICOM/series_11
+manifest-1788381992720_DICOM/series_12
+
+
+--------------------------------------------------------------------
+DATASETS THAT FAIL TO LOAD (0)
+--------------------------------------------------------------------
+(none)
+
+
+--------------------------------------------------------------------
+HISTORY / PREVIOUS FAILURE
+--------------------------------------------------------------------
+Before the fix, 5 series failed to load:
+    manifest-1787681973389_DICOM/series_4
+    manifest-1788373825860_DICOM/series_1
+    manifest-1788373825860_DICOM/series_2
+    manifest-1788373825860_DICOM/series_6
+    manifest-1788373825860_DICOM/series_7
+
+They all threw "Caught exception: No valid DICOM slices loaded".
+
+The cause was the DICOM transfer syntax used by those datasets:
+
+    Transfer Syntax UID : 1.2.840.10008.1.2
+    Name                : Implicit VR Little Endian
+
+The loader only handled Explicit VR Little Endian (1.2.840.10008.1.2.1).
+It read a 2-byte VR field after every tag that does not exist in implicit
+VR, lost alignment, and never reached the pixel-data tag (7FE0,0010).
+
+Fixed in src/app/dicom_loader.cpp by detecting the transfer syntax from
+tag (0002,0010) in the File Meta Group and, for Implicit VR Little
+Endian, parsing each element with a 32-bit length and no VR field.
+See ModificationsMade/ImplicitVRSupport.md for details.
