@@ -137,12 +137,23 @@ for dataset in "${DATASETS[@]}"; do
     dataset_dir="$OUTPUT_ROOT/$dataset_clean"
     mkdir -p "$dataset_dir"
 
+    # --- dataset-level info (independent of strategy/epsilon) ---
+    series_path="$TCIA_ROOT/$dataset"
+    # Size on disk: total bytes of the .dcm files in the series directory.
+    disk_bytes=$(find "$series_path" -name '*.dcm' -type f -printf '%s\n' 2>/dev/null | \
+        awk '{s+=$1} END {print s+0}')
+    disk_human=$(numfmt --to=iec-i --suffix=B "$disk_bytes" 2>/dev/null || echo "${disk_bytes}B")
+    # Recompute sparsity only if the manifest is missing or --recompute-sparsity passed.
+    info_csv="$dataset_dir/dataset_info.csv"
+    if [[ ! -f "$info_csv" ]]; then
+        printf 'dataset,disk_bytes,disk_human\n%s,%s,%s\n' "$dataset_clean" "$disk_bytes" "$disk_human" > "$info_csv"
+    fi
+
     for strategy_entry in "${STRATEGIES[@]}"; do
         IFS='|' read -r strat_label strat_args strat_file <<< "$strategy_entry"
 
         csv_path="$dataset_dir/${strat_file}.csv"
         ppm_path="$dataset_dir/${strat_file}.ppm"
-        series_path="$TCIA_ROOT/$dataset"
 
         run_count=$((run_count + 1))
 
@@ -168,6 +179,17 @@ for dataset in "${DATASETS[@]}"; do
 
         if "${cmd[@]}" >> "$dataset_dir/${strat_file}.log" 2>&1; then
             echo "  OK  → $csv_path"
+            # Capture the rendering-relevant sparsity % from this run's log and
+            # record it (with the epsilon used) into the dataset sparsity manifest.
+            if grep -q 'rendering-relevant' "$dataset_dir/${strat_file}.log"; then
+                eps=$(grep -oE 'eps=[0-9.]+' "$dataset_dir/${strat_file}.log" | head -n1 | cut -d= -f2)
+                pct=$(grep -oE '[0-9.]+% sparse' "$dataset_dir/${strat_file}.log" | head -n1 | sed 's/% sparse//')
+                sparsity_csv="$dataset_dir/sparsity.csv"
+                if [[ ! -f "$sparsity_csv" ]]; then
+                    printf 'strategy,epsilon,sparsity_pct\n' > "$sparsity_csv"
+                fi
+                printf '%s,%s,%s\n' "$strat_label" "${eps:-}" "$pct" >> "$sparsity_csv"
+            fi
         else
             echo "  FAIL (exit $?) → see $dataset_dir/${strat_file}.log"
             fail_count=$((fail_count + 1))

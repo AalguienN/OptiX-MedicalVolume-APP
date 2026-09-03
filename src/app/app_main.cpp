@@ -464,6 +464,28 @@ int main(int argc, char** argv)
             scalarMax = 4096.0f;
         }
 
+        // Rendering-relevant sparsity: fraction of voxels whose transfer-function
+        // opacity is below the epsilon threshold. This is the same classification
+        // every sparse strategy uses (see adaptive_grid_marcher.cpp, bricked_regions,
+        // octree, nanovdb), so it reflects how much empty space the strategy can skip.
+        {
+            const float invRange  = 1.0f / (scalarMax - scalarMin);
+            const size_t total    = volume.data.size();
+            size_t relevantCount  = 0;
+            for (size_t i = 0; i < total; ++i)
+            {
+                const float s   = volume.data[i];
+                const float tft = (s - scalarMin) * invRange * 2047.0f;
+                int idx = static_cast<int>(std::rint(tft));
+                idx = std::max(0, std::min(2047, idx));
+                if (tf.lut[idx].w >= brickEpsilon) ++relevantCount;
+            }
+            const double sparse = total > 0 ? 100.0 * (1.0 - static_cast<double>(relevantCount) / static_cast<double>(total)) : 100.0;
+            std::cout << "Volume stats: rendering-relevant (eps=" << brickEpsilon
+                      << "): " << relevantCount << "/" << total << " relevant, "
+                      << sparse << "% sparse\n";
+        }
+
         const char* irPath = std::getenv("OPTIXIR_PATH");
 
         // Per-strategy setup: scene (acceleration structure) and the OptiX
