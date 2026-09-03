@@ -239,7 +239,7 @@ extern "C" __global__ void __raygen__rg_adaptive()
     float3 origin    = rtData->cam_eye;
     float3 direction = normalize(d.x * rtData->camera_u + d.y * rtData->camera_v + rtData->camera_w);
 
-    float3 color = make_float3(0.1f, 0.1f, 0.2f);
+    float3 color = make_float3(0.0f, 0.0f, 0.0f);
 
     float tmin, tmax;
     if (intersectAABB(origin, direction, params.volumeOrigin, params.volumeMax, tmin, tmax))

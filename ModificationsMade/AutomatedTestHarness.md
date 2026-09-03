@@ -28,17 +28,38 @@ whatever it finds. Adding a new manifest or series requires no script change.
 ### Output location (brother folder)
 
 All outputs go to a folder **next to the project root** (i.e. a sibling of `optix_clone/`),
-`../optix_test_results/`, never inside the repo. Layout per dataset:
+`../optix_test_results/`, never inside the repo. Layout:
 
 ```
 optix_test_results/
+├── results.csv                # AGGREGATE: one row per execution (the primary result)
 └── <manifest>__<series>/
-    ├── dataset_info.csv          # disk size (dataset level, static)
-    ├── sparsity.csv              # measured rendering-relevant sparsity per strategy
-    ├── <config>.csv              # per-frame metrics (frame,render_ms,fps,latency_ms,...)
-    ├── <config>.ppm              # last-frame PPM snapshot
-    └── <config>.log              # stdout+stderr of that run
+    ├── dataset_info.csv       # disk size (dataset level, static)
+    ├── sparsity.csv           # measured rendering-relevant sparsity per strategy
+    ├── <config>.csv           # per-frame metrics timeseries (frame,render_ms,fps,latency_ms)
+    ├── <config>.ppm           # last-frame PPM snapshot
+    └── <config>.log           # stdout+stderr of that run (truncated per execution)
 ```
+
+### Aggregate results CSV (`results.csv`)
+
+Every successful execution appends **one row** to the shared `results.csv` at the output root,
+so one row = one run (config × dataset). The program itself writes the row at the end of the run
+(from values already in memory — no log parsing). Columns:
+
+```
+dataset, strategy, mode, dicom_series_path, num_slices, modality, slice_dims,
+vol_dims, spacing, origin, scalar_min, scalar_max, n_relevant, n_total, sparsity_pct,
+uploaded_mb, epsilon, frames, render_mean_ms, render_min_ms, render_max_ms,
+fps_mean, fps_latest, gpu_mem_bytes, latency_latest_ms,
+vol_samples, dist_reads, leaps, total_steps_bounds, skip_ratio_bounds, snapshot_path
+```
+
+The header is written once (when the file is empty); subsequent runs append data rows only.
+`sparsity_pct`, `epsilon`, the traversal counters and `skip_ratio_bounds`, timings, GPU memory,
+latency, and the snapshot path all come straight from the run. `disk_bytes` is folded into the
+`dataset`/output naming context — the row's size-on-disk is derivable from the series path and
+the dataset-level `dataset_info.csv`.
 
 ### Parameter coverage (34 configurations)
 
@@ -73,11 +94,18 @@ this yields 34 × 47 = **1,598 runs**.
 
 ### CLI flags
 
-- `./run_tests.sh` — run everything.
+- `./run_tests.sh` — run everything (reuses/appends any previous results).
+- `--help` / `-h` — print usage and exit.
 - `--dry-run` — print commands without executing.
 - `--resume` — skip any configuration whose CSV already exists and has content (failed runs get
   a `FAILED` marker file that also counts as existing, so a later `--resume` skips them).
 - `--frames N` — frames per run (default 200).
+- `--wipe` — delete the whole results folder (`../optix_test_results/`) and exit immediately.
+  It wipes **only**, with no rendering: all other flags are ignored and the run terminates before
+  any execution. Use it to start a clean run later with a fresh `./run_tests.sh`.
+
+Each run also forwards the aggregate-CSV context to the binary:
+`--summary results.csv`, `--dataset <label>`, `--strategy <label>`, `--disk-bytes <bytes>`.
 
 ## Sparsity report (C++ change)
 
@@ -149,14 +177,20 @@ independently, confirming the capture is faithful.
 
 ## Files changed
 
-- `run_tests.sh` — new automated test harness (dataset discovery, strategy/epsilon sweep,
-  per-run CSV/PPM/log, disk-size `dataset_info.csv`, sparsity capture, `--dry-run`/`--resume`/
-  `--frames` flags).
-- `src/app/app_main.cpp` — added the rendering-relevant sparsity% print for all modes.
+- `run_tests.sh` — automated test harness (dataset discovery, strategy/epsilon sweep, per-run
+  CSV/PPM/log, `--dry-run`/`--resume`/`--frames`/`--wipe` flags); now forwards the aggregate
+  summary context (`--summary/--dataset/--strategy/--disk-bytes`) to the binary and truncates
+  each per-run `.log` so it holds exactly one execution.
+- `src/app/app_main.cpp` — added the rendering-relevant sparsity% print (all modes) and the
+  aggregate `results.csv` row writer (`writeSummaryRow`), with `--summary/--dataset/--strategy/
+  --disk-bytes` CLI options.
 
 ## Status
 
 - 34-configuration matrix runs cleanly to completion (verified on a single dataset; full 1,598-run
   sweep not yet executed).
+- `results.csv` verified end-to-end: header written once, 34 appended rows, all columns populated
+  (timings, traversal counters, skip ratio, sparsity, snapshot path).
 - Sparsity and disk-size capture verified against direct binary output.
+- `--wipe` verified to delete the results folder and exit immediately, ignoring other flags.
 - Changes not yet committed.

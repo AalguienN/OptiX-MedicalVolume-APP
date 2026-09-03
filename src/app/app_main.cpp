@@ -97,8 +97,12 @@ void printUsage(const char* prog) {
 << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n"
                  << "  --dbg-counter-bounds    Log per-frame skip_ratio_bounds columns to CSV\n"
                  << "                     (fraction of the volume-bounds avoided; default off)\n"
-                << "  --nanovdb-sampler <nearest|trilinear>  NanoVDB interpolation (default nearest)\n"
-               << "  --snapshot <path>  Write the last rendered frame to <path> as a PPM image\n";
+                 << "  --nanovdb-sampler <nearest|trilinear>  NanoVDB interpolation (default nearest)\n"
+                << "  --snapshot <path>  Write the last rendered frame to <path> as a PPM image\n"
+                << "  --summary <path>   Append one aggregate metrics row to <path> (CSV) on exit\n"
+                << "  --dataset <label>  Dataset label for the --summary row (default: derived)\n"
+                << "  --strategy <label> Strategy/config label for the --summary row (default: mode)\n"
+                << "  --disk-bytes <n>   Series size on disk (bytes) for the --summary row\n";
 }
 
 // Shared per-frame render loop. The Params struct is wired once before this
@@ -207,6 +211,68 @@ void printMetricsSummary(const MetricsCollector& metrics, const char* modeLabel)
         std::cout << "  latency  : latest=" << metrics.latestLatencyMs() << " ms\n";
 }
 
+// Appends one aggregate row (a single execution) to the shared summary CSV.
+// The CSV has one header line, written only when the file is empty/new. This is
+// called at the end of a successful run with every value already in memory, so
+// the harness does not have to parse the stdout log.
+static void writeSummaryRow(const char* path,
+                            const char* dataset, const char* strategy,
+                            long long diskBytes, const char* mode,
+                            const std::string& seriesPath,
+                            const Volume& volume, const std::string& modality,
+                            size_t relCount, size_t relTotal, double relSparse,
+                            float scalarMin, float scalarMax, float epsilon,
+                            const MetricsCollector& metrics,
+                            const unsigned int dbg[4], double skipRatio,
+                            const std::string& snapshotPath)
+{
+    if (!path || path[0] == '\0')
+        return;
+
+    const char kHeader[] =
+        "dataset,strategy,mode,dicom_series_path,num_slices,modality,slice_dims,"
+        "vol_dims,spacing,origin,scalar_min,scalar_max,n_relevant,n_total,sparsity_pct,"
+        "uploaded_mb,epsilon,frames,render_mean_ms,render_min_ms,render_max_ms,"
+        "fps_mean,fps_latest,gpu_mem_bytes,latency_latest_ms,"
+        "vol_samples,dist_reads,leaps,total_steps_bounds,skip_ratio_bounds,snapshot_path\n";
+
+    std::FILE* f = std::fopen(path, "a");
+    if (!f)
+    {
+        std::cerr << "Failed to open summary CSV " << path << "\n";
+        return;
+    }
+
+    std::fseek(f, 0, SEEK_END);
+    if (std::ftell(f) == 0)
+        std::fputs(kHeader, f);
+
+    const double latency = metrics.hasLatency() ? metrics.latestLatencyMs() : -1.0;
+    const float volumeMB = static_cast<float>(volume.data.size() * sizeof(float) / (1024.0 * 1024.0));
+
+    std::fprintf(f,
+        "%s,%s,%s,%s,%d,%s,%dx%d,"
+        "%dx%dx%d,(%g,%g,%g),(%g,%g,%g),"
+        "%g,%g,%zu,%zu,%.4f,"
+        "%g,%g,%u,%.6f,%.6f,%.6f,"
+        "%.6f,%.6f,%zu,%.3f,"
+        "%u,%u,%u,%u,%.6f,"
+        "%s\n",
+        dataset ? dataset : "", strategy ? strategy : "", mode ? mode : "",
+        seriesPath.c_str(), volume.dimZ, modality.c_str(), volume.dimX, volume.dimY,
+        volume.dimX, volume.dimY, volume.dimZ,
+        volume.spacingX, volume.spacingY, volume.spacingZ,
+        volume.originX, volume.originY, volume.originZ,
+        scalarMin, scalarMax, relCount, relTotal, relSparse,
+        volumeMB, epsilon, metrics.numFramesRecorded(),
+        metrics.meanRenderMs(), metrics.minRenderMs(), metrics.maxRenderMs(),
+        metrics.meanFps(), metrics.latestFps(), metrics.gpuMemoryBytes(), latency,
+        dbg[0], dbg[1], dbg[2], dbg[3], skipRatio,
+        snapshotPath.c_str());
+
+    std::fclose(f);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -229,6 +295,10 @@ int main(int argc, char** argv)
     bool nanovdbNearest = false;    // 1 = nearest, 0 = trilinear (NanoVDB, default)
     bool adaptiveMarch = false;     // adaptive-step inner march in region strategies
     bool dbgCounterBounds = false;   // log per-frame skip_ratio_bounds to CSV
+    std::string summaryPath;        // aggregate one-row-per-run CSV (appended on exit)
+    std::string summaryDataset;     // dataset label for the aggregate row
+    std::string summaryStrategy;    // strategy/config label for the aggregate row
+    long long summaryDiskBytes = -1; // size-on-disk of the series (bytes) for the row
 
     for (int i = 2; i < argc; ++i)
     {
@@ -317,6 +387,22 @@ int main(int argc, char** argv)
                 printUsage(argv[0]);
                 return 1;
             }
+        }
+        else if (std::strcmp(argv[i], "--summary") == 0 && i + 1 < argc)
+        {
+            summaryPath = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--dataset") == 0 && i + 1 < argc)
+        {
+            summaryDataset = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--strategy") == 0 && i + 1 < argc)
+        {
+            summaryStrategy = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--disk-bytes") == 0 && i + 1 < argc)
+        {
+            summaryDiskBytes = std::atoll(argv[++i]);
         }
         else
         {
@@ -468,22 +554,24 @@ int main(int argc, char** argv)
         // opacity is below the epsilon threshold. This is the same classification
         // every sparse strategy uses (see adaptive_grid_marcher.cpp, bricked_regions,
         // octree, nanovdb), so it reflects how much empty space the strategy can skip.
+        // Values are hoisted to this scope so the end-of-run summary can reuse them.
+        size_t relCount = 0, relTotal = 0;
+        double relSparse = 100.0;
         {
             const float invRange  = 1.0f / (scalarMax - scalarMin);
-            const size_t total    = volume.data.size();
-            size_t relevantCount  = 0;
-            for (size_t i = 0; i < total; ++i)
+            relTotal = volume.data.size();
+            for (size_t i = 0; i < relTotal; ++i)
             {
                 const float s   = volume.data[i];
                 const float tft = (s - scalarMin) * invRange * 2047.0f;
                 int idx = static_cast<int>(std::rint(tft));
                 idx = std::max(0, std::min(2047, idx));
-                if (tf.lut[idx].w >= brickEpsilon) ++relevantCount;
+                if (tf.lut[idx].w >= brickEpsilon) ++relCount;
             }
-            const double sparse = total > 0 ? 100.0 * (1.0 - static_cast<double>(relevantCount) / static_cast<double>(total)) : 100.0;
+            relSparse = relTotal > 0 ? 100.0 * (1.0 - static_cast<double>(relCount) / static_cast<double>(relTotal)) : 100.0;
             std::cout << "Volume stats: rendering-relevant (eps=" << brickEpsilon
-                      << "): " << relevantCount << "/" << total << " relevant, "
-                      << sparse << "% sparse\n";
+                      << "): " << relCount << "/" << relTotal << " relevant, "
+                      << relSparse << "% sparse\n";
         }
 
         const char* irPath = std::getenv("OPTIXIR_PATH");
@@ -723,6 +811,15 @@ int main(int argc, char** argv)
                       << dbg[0] << " samples, " << dbg[1] << " reads, " << dbg[2]
                       << " leaps, " << dbg[3] << " bounds-steps)\n"
                       << "  skip ratio : bounds=" << ratio << "\n";
+
+            writeSummaryRow(summaryPath.c_str(),
+                            summaryDataset.c_str(), summaryStrategy.c_str(),
+                            summaryDiskBytes, modeLabel, seriesPath,
+                            volume, volume.modality,
+                            relCount, relTotal, relSparse,
+                            scalarMin, scalarMax, brickEpsilon,
+                            metrics, dbg, ratio,
+                            snapshotPath);
         }
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_dbgCounters)));
 

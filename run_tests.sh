@@ -30,8 +30,48 @@ DRY_RUN=false
 RESUME=false
 FRAMES=200
 
+usage() {
+    cat <<EOF
+Usage: $0 [options]
+
+Runs every rendering strategy against every TCIA dataset (found automatically in
+\$TCIA_ROOT, default ~/Documents/TCIA) with a sweep of parameter dimensions.
+Each execution is one run; results are stored in the brother folder
+../optix_test_results/.
+
+Options:
+  -h, --help       Show this help and exit.
+  --wipe           Delete the whole results folder (../optix_test_results/) and
+                   exit immediately. Wipes ONLY — no rendering; all other flags
+                   are ignored. Run a fresh ./run_tests.sh afterwards.
+  --dry-run        Print the commands that would run, without executing them.
+  --resume         Skip any configuration whose CSV already exists (useful to
+                   continue after an interruption).
+  --frames N       Frames per run (default 200). Lower = faster but noisier
+                   timing stats; use higher for final measurements.
+
+Environment:
+  TCIA_ROOT        Directory scanned for manifest-*/series_* datasets
+                   (default: \$HOME/Documents/TCIA).
+
+Output (one row per execution):
+  results.csv      Aggregate summary CSV at the output root — dataset, strategy,
+                   mode, timings, fps, gpu mem, sparsity, traversal counters,
+                   skip ratio, snapshot path, etc.
+EOF
+}
+
 for arg in "$@"; do
     case "$arg" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --wipe)
+            rm -rf "$OUTPUT_ROOT"
+            echo "Wiped: $OUTPUT_ROOT"
+            exit 0
+            ;;
         --dry-run)  DRY_RUN=true  ;;
         --resume)   RESUME=true   ;;
         --frames)   ;;  # handled below
@@ -168,7 +208,11 @@ for dataset in "${DATASETS[@]}"; do
              --mode $strat_args
              --frames "$FRAMES"
              --metrics "$csv_path"
-             --snapshot "$ppm_path")
+             --snapshot "$ppm_path"
+             --summary "$OUTPUT_ROOT/results.csv"
+             --dataset "$dataset_clean"
+             --strategy "$strat_label"
+             --disk-bytes "$disk_bytes")
 
         echo "[$run_count/$total_runs] $dataset_clean / $strat_label"
 
@@ -177,7 +221,7 @@ for dataset in "${DATASETS[@]}"; do
             continue
         fi
 
-        if "${cmd[@]}" >> "$dataset_dir/${strat_file}.log" 2>&1; then
+        if "${cmd[@]}" > "$dataset_dir/${strat_file}.log" 2>&1; then
             echo "  OK  → $csv_path"
             # Capture the rendering-relevant sparsity % from this run's log and
             # record it (with the epsilon used) into the dataset sparsity manifest.

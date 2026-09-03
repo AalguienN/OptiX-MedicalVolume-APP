@@ -28,7 +28,7 @@ extern "C" __global__ void __raygen__rg()
     float3 origin    = rtData->cam_eye;
     float3 direction = normalize(d.x * rtData->camera_u + d.y * rtData->camera_v + rtData->camera_w);
 
-    float3 color = make_float3(0.1f, 0.1f, 0.2f);
+    float3 color = make_float3(0.0f, 0.0f, 0.0f);
 
     float tmin, tmax;
     if (intersectAABB(origin, direction, params.volumeOrigin, params.volumeMax, tmin, tmax))
@@ -127,12 +127,7 @@ extern "C" __global__ void __closesthit__ch_vol()
 // ============================================================
 extern "C" __global__ void __miss__ms()
 {
-    uint3 idx = optixGetLaunchIndex();
-    uint3 dim = optixGetLaunchDimensions();
-
-    float t = static_cast<float>(idx.y) / static_cast<float>(dim.y);
-    float3 bg = make_float3(0.1f + 0.2f * t, 0.1f + 0.2f * t, 0.2f + 0.3f * t);
-    setPayload(bg);
+    setPayload(make_float3(0.0f, 0.0f, 0.0f));
 }
 
 extern "C" __global__ void __closesthit__ch()
