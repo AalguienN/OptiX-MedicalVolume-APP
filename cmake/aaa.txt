@@ -1,0 +1,7 @@
+manual
+optix
+adaptive-march {sweep eps={0.01, 0.05, 0.1,0.2}
+bricked regions {sweep eps={0.01, 0.05, 0.1,0.2}, sweep brick-size={8,16,32}, adaptive-march sweep={on,off}}
+octree {sweep eps={0.01, 0.05, 0.1,0.2}, sweep leaf-size={4,8,16}, sweep adaptive-march={on,off}}
+octree-regions {sweep eps={0.01, 0.05, 0.1,0.2}, sweep leaf-size={4,8,16}, sweep adaptive-march={on,off}}
+nanovdb {sweep eps={0.01, 0.05, 0.1,0.2}, sweep nanovdb-sampler={nearest,trillinear}}
