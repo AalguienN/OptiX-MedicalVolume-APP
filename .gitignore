@@ -1,1 +1,5 @@
 build/
+
+python_visualization_tests/plots/
+python_visualization_tests/venv/
+
