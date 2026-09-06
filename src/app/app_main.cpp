@@ -93,6 +93,10 @@ void printUsage(const char* prog) {
                << "  --adaptive-march <on|off>  Use the adaptive-step (Chebyshev distance map)\n"
                << "                     inner march for the octree / bricked-regions /\n"
                << "                     octree-regions strategies (default off)\n"
+               << "  --directional-sectors <0|6>  Directional (quantized) distance map for\n"
+               << "                     empty-space skipping: 6 = face sectors (+-x, +-y, +-z),\n"
+               << "                     ray direction quantized to its sector distance (in\n"
+               << "                     --mode adaptive; default 0 = scalar Chebyshev map)\n"
                 << "  --metrics <path>   Append per-frame performance series (CSV) to <path>\n"
                 << "  --window <n>       FPS observation window in frames (default 120)\n"
 << "  --frames <n>       Exit after n frames (benchmarking; default: until closed)\n"
@@ -310,6 +314,7 @@ int main(int argc, char** argv)
     unsigned int maxFrames = 0;     // 0 = run until window closes
     bool nanovdbNearest = false;    // 1 = nearest, 0 = trilinear (NanoVDB, default)
     bool adaptiveMarch = false;     // adaptive-step inner march in region strategies
+    int directionalSectors = 0;     // directional (quantized) distance map sectors (0=off, 6=facets)
     bool dbgCounterBounds = false;   // log per-frame skip_ratio_bounds to CSV
     std::string summaryPath;        // aggregate one-row-per-run CSV (appended on exit)
     std::string summaryDataset;     // dataset label for the aggregate row
@@ -405,6 +410,17 @@ int main(int argc, char** argv)
                 return 1;
             }
         }
+        else if (std::strcmp(argv[i], "--directional-sectors") == 0 && i + 1 < argc)
+        {
+            directionalSectors = std::atoi(argv[++i]);
+            if (directionalSectors != 0 && directionalSectors != 6)
+            {
+                std::cerr << "Unknown directional-sectors value: " << directionalSectors
+                          << " (expected 0 or 6)\n";
+                printUsage(argv[0]);
+                return 1;
+            }
+        }
         else if (std::strcmp(argv[i], "--summary") == 0 && i + 1 < argc)
         {
             summaryPath = argv[++i];
@@ -448,7 +464,8 @@ int main(int argc, char** argv)
             std::cout << "Brick size: " << brickSize << "^3 voxels, epsilon="
                       << brickEpsilon << "\n";
         if (traceMode == TraceMode::ADAPTIVE)
-            std::cout << "Adaptive-step distance map, epsilon=" << brickEpsilon << "\n";
+            std::cout << "Adaptive-step distance map, epsilon=" << brickEpsilon
+                      << ", directional sectors=" << directionalSectors << "\n";
         if (traceMode == TraceMode::OCTREE || traceMode == TraceMode::BRICKED_REGIONS ||
             traceMode == TraceMode::OCTREE_REGIONS)
             std::cout << "Adaptive inner march: " << (adaptiveMarch ? "on" : "off") << "\n";
@@ -673,6 +690,13 @@ int main(int argc, char** argv)
             params.distanceTex = adaptiveGrid->distanceTex();
             params.epsilon     = brickEpsilon;
             params.useAdaptive = 1u;
+
+            if (directionalSectors > 0 && adaptiveGrid->buildDirectional(directionalSectors))
+            {
+                params.directionalSectors = static_cast<unsigned int>(adaptiveGrid->sectors());
+                for (int s = 0; s < adaptiveGrid->sectors(); ++s)
+                    params.sectorTexes[s] = adaptiveGrid->sectorTexture(s);
+            }
 
             std::cout << "Distance map: " << adaptiveGrid->dims().x << "x"
                       << adaptiveGrid->dims().y << "x" << adaptiveGrid->dims().z

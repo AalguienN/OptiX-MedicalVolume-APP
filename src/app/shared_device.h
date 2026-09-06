@@ -46,6 +46,16 @@ struct Params
     float                  epsilon;
     unsigned int           useAdaptive;
 
+    // Directional (quantized) empty-space skipping (thesis proposal). When
+    // directionalSectors > 0, the sphere of ray directions is partitioned into
+    // that many cones and, per voxel, one distance to the nearest
+    // rendering-relevant voxel is stored per sector (directional texture
+    // array). The march quantizes the ray direction to its sector and uses the
+    // sector's distance as the safe leap size, clamped by the all-direction
+    // scalar map (distanceTex) so the leap can only improve on the scalar one.
+    unsigned int           directionalSectors;
+    cudaTextureObject_t    sectorTexes[6];
+
     // Bricked-regions strategy fields (host sets them only for
     // TraceMode::BRICKED_REGIONS). regionAabbs is the per-primitive AABB array
     // of the multi-primitive GAS; each primitive is one rendering-relevant

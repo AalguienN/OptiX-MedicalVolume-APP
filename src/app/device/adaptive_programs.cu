@@ -76,6 +76,20 @@ static __forceinline__ __device__ float4 compositeSample(
     return tfVal;
 }
 
+// Quantize a ray direction to one of the six face sectors (dominant axis and
+// sign, matching the host faceSectorFor()): 0..5 = +x,-x,+y,-y,+z,-z.
+static __forceinline__ __device__ int faceSectorFor(float3 d)
+{
+    const float ax = fabsf(d.x);
+    const float ay = fabsf(d.y);
+    const float az = fabsf(d.z);
+    if (ax >= ay && ax >= az)
+        return (d.x >= 0.0f) ? 0 : 1;
+    if (ay >= az)
+        return (d.y >= 0.0f) ? 2 : 3;
+    return (d.z >= 0.0f) ? 4 : 5;
+}
+
 // Adaptive-step position advance. When the current sample is transparent (its
 // transfer-function opacity is below the relevance threshold, i.e. it cannot
 // be a rendering-relevant voxel) consult the distance map to leap over the
@@ -85,16 +99,39 @@ static __forceinline__ __device__ float4 compositeSample(
 // sampled Chebyshev distance D >= 2 the voxel is two or more voxels from any
 // relevant voxel, so (D-1) safe voxel steps advance strictly inside the
 // guaranteed-empty region and never skip a non-empty voxel.
+//
+// Directional mode (params.directionalSectors > 0): the ray is quantized to
+// its face sector and that sector's directional distance map is queried
+// INSTEAD OF the all-direction scalar map (not clamped by it). The sector
+// distance is the ray-parametric distance along the sector's principal axis
+// to the nearest rendering-relevant voxel with the same orthogonal
+// coordinates; it can be much larger than the scalar Chebyshev distance
+// when the closest relevant voxel is laterally offset rather than ahead.
+// This allows considerably larger leaps than the scalar map, at the cost
+// of occasionally skipping a thin structure near the ray path — the
+// conservative/approximate nature of the angular quantization is the
+// "interesting technical difficulty" flagged in the thesis proposal.
 static __forceinline__ __device__ float adaptiveAdvance(
-    float t, float3 texCoord, float4 tfVal,
+    float t, float3 texCoord, float3 rayDir, float4 tfVal,
     float stepSize, float voxelWorldStep,
     unsigned int& nDistReads, unsigned int& nLeaps)
 {
     if (tfVal.w >= params.epsilon)
         return t + stepSize;
 
-    float D = 255.0f * tex3D<float>(params.distanceTex, texCoord.x, texCoord.y, texCoord.z);
-    ++nDistReads;
+    float D;
+    if (params.directionalSectors > 0)
+    {
+        const int sector = faceSectorFor(rayDir);
+        D = 255.0f * tex3D<float>(params.sectorTexes[sector],
+                                      texCoord.x, texCoord.y, texCoord.z);
+        ++nDistReads;
+    }
+    else
+    {
+        D = 255.0f * tex3D<float>(params.distanceTex, texCoord.x, texCoord.y, texCoord.z);
+        ++nDistReads;
+    }
 
     int iD = __float2int_rd(D);
     if (iD >= 2)
@@ -174,7 +211,7 @@ static __forceinline__ __device__ void spanMarchAdaptive(
                                        accumR, accumG, accumB, accumA);
         ++nSamples;
 
-        t = adaptiveAdvance(t, texCoord, tfVal, stepSize, voxelWorldStep,
+        t = adaptiveAdvance(t, texCoord, direction, tfVal, stepSize, voxelWorldStep,
                             nDistReads, nLeaps);
     }
 

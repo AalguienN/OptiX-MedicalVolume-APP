@@ -12,6 +12,10 @@ AdaptiveGridMarcher::~AdaptiveGridMarcher()
         CUDA_CHECK_NOEXCEPT(cudaDestroyTextureObject(d_distanceTex_));
     if (d_distanceArray_)
         CUDA_CHECK_NOEXCEPT(cudaFreeArray(d_distanceArray_));
+    for (cudaTextureObject_t t : dirTextures_)
+        if (t) CUDA_CHECK_NOEXCEPT(cudaDestroyTextureObject(t));
+    for (cudaArray* a : dirArrays_)
+        if (a) CUDA_CHECK_NOEXCEPT(cudaFreeArray(a));
 }
 
 void AdaptiveGridMarcher::build(const Volume& volume, const TransferFunction& tf,
@@ -146,6 +150,132 @@ void AdaptiveGridMarcher::build(const Volume& volume, const TransferFunction& tf
     uploadToDevice();
 }
 
+// ============================================================
+// Directional (quantized) distance map.
+//
+// The sphere of directions is partitioned into 6 face sectors (+-x, +-y,
+// +-z). For every voxel the directional distance along a sector is the
+// distance, in Chebyshev voxel steps along the sector's principal axis, to
+// the nearest rendering-relevant voxel seen in that direction (255 if none
+// within the capped radius). These six per-voxel values are independent of
+// the ray direction, so the whole field is a K x V auxiliary grid computed
+// with six directional scans (forward and backward along each axis).
+// ============================================================
+
+// Per-voxel axis-aligned directional distances (voxel Chebyshev units along
+// each of the six principal directions), capped to 255.
+void AdaptiveGridMarcher::axisFaceDistances(
+    int x, int y, int z, const std::vector<unsigned char>& occupied,
+    std::array<unsigned char, 6>& out) const
+{
+    const int nx = dims_.x, ny = dims_.y, nz = dims_.z;
+    std::array<unsigned char, 6> dist = { 255, 255, 255, 255, 255, 255 };
+
+    // Along X.
+    {
+        const int row = (z * ny + y);
+        const int base = row * nx;
+        unsigned char d = occupied[base + x] ? 0 : nx;
+        for (int i = x + 1; i < nx && d < 255; ++i)
+            if (occupied[base + i]) { d = i - x; break; }
+        dist[0] = d; // +x
+        d = occupied[base + x] ? 0 : nx;
+        for (int i = x - 1; i >= 0 && d < 255; --i)
+            if (occupied[base + i]) { d = x - i; break; }
+        dist[1] = d; // -x
+    }
+    // Along Y.
+    {
+        const int base = (z * ny + y) * nx + x;
+        unsigned char d = occupied[base] ? 0 : ny;
+        for (int i = y + 1; i < ny && d < 255; ++i)
+            if (occupied[(static_cast<size_t>(z) * ny + i) * nx + x]) { d = i - y; break; }
+        dist[2] = d; // +y
+        d = occupied[base] ? 0 : ny;
+        for (int i = y - 1; i >= 0 && d < 255; --i)
+            if (occupied[(static_cast<size_t>(z) * ny + i) * nx + x]) { d = y - i; break; }
+        dist[3] = d; // -y
+    }
+    // Along Z.
+    {
+        const int base = (z * ny + y) * nx + x;
+        unsigned char d = occupied[base] ? 0 : nz;
+        for (int i = z + 1; i < nz && d < 255; ++i)
+            if (occupied[i * ny * nx + y * nx + x]) { d = i - z; break; }
+        dist[4] = d; // +z
+        d = occupied[base] ? 0 : nz;
+        for (int i = z - 1; i >= 0 && d < 255; --i)
+            if (occupied[i * ny * nx + y * nx + x]) { d = z - i; break; }
+        dist[5] = d; // -z
+    }
+
+    out = dist;
+}
+
+bool AdaptiveGridMarcher::buildDirectional(int sectors)
+{
+    if (sectors != DIR_FACES)
+    {
+        std::cout << "Adaptive directional: unsupported sector count " << sectors
+                  << " (only " << DIR_FACES << " implemented)\n";
+        return false;
+    }
+    if (dist_.empty())
+        throw std::runtime_error("AdaptiveGridMarcher::buildDirectional called before build()");
+
+    const int nx = dims_.x, ny = dims_.y, nz = dims_.z;
+    const size_t V = dist_.size();
+
+    // Recover the occupancy (dist_ == 0) used to build the scalar map. The
+    // directional maps reuse the same rendering-relevant classification.
+    std::vector<unsigned char> occupied(V, 0);
+    for (size_t i = 0; i < V; ++i)
+        occupied[i] = (dist_[i] == 0) ? 1 : 0;
+
+    std::vector<unsigned char> axisDist(6 * V, 255);
+    std::array<unsigned char, 6> face;
+    for (int z = 0; z < nz; ++z)
+        for (int y = 0; y < ny; ++y)
+            for (int x = 0; x < nx; ++x)
+            {
+                axisFaceDistances(x, y, z, occupied, face);
+                const size_t idx = (static_cast<size_t>(z) * ny + y) * nx + x;
+                for (int s = 0; s < 6; ++s)
+                    axisDist[s * V + idx] = face[s];
+            }
+
+    // Fill the per-sector maps from the axis distances. A sector selects the
+    // single axis distance that matches its direction (face sectors are
+    // axis-aligned by construction); the host index layout matches the device
+    // faceSectorFor() quantization (+-x, +-y, +-z).
+    dirDist_.clear();
+    dirDist_.resize(6, std::vector<unsigned char>(V, 255));
+    for (size_t i = 0; i < V; ++i)
+        for (int s = 0; s < 6; ++s)
+            dirDist_[s][i] = axisDist[s * V + i];
+
+    // Diagnostic: report per-sector mean distance of the empty voxels that
+    // would produce a larger leap than the all-direction scalar map.
+    {
+        unsigned long long better = 0, empty = 0;
+        for (size_t i = 0; i < V; ++i)
+        {
+            if (dist_[i] == 0) continue;
+            ++empty;
+            for (int s = 0; s < 6; ++s)
+                if (dirDist_[s][i] > dist_[i]) { ++better; break; }
+        }
+        std::cout << "Directional sector map: " << 6 << " sectors x " << V / (1024.0 * 1024.0)
+                  << " Mvoxels = " << 6 * V / (1024.0 * 1024.0) << " MB, "
+                  << (better * 100.0 / (empty ? empty : 1)) << "% of empty voxels have a sector "
+                  << "distance above the scalar map\n";
+    }
+
+    dirSectorCount_ = 6;
+    uploadDirectionalToDevice();
+    return true;
+}
+
 void AdaptiveGridMarcher::uploadToDevice()
 {
     if (d_distanceTex_)
@@ -191,4 +321,50 @@ void AdaptiveGridMarcher::uploadToDevice()
 
     std::cout << "Adaptive distance map: " << dims_.x << "x" << dims_.y << "x" << dims_.z
               << " (" << dist_.size() / (1024.0 * 1024.0) << " MB)\n";
+}
+
+void AdaptiveGridMarcher::uploadDirectionalToDevice()
+{
+    cudaExtent extent = make_cudaExtent(dims_.x, dims_.y, dims_.z);
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<unsigned char>();
+
+    dirArrays_.resize(dirSectorCount_, nullptr);
+    dirTextures_.resize(dirSectorCount_, 0);
+
+    for (int s = 0; s < dirSectorCount_; ++s)
+    {
+        cudaArray* array = nullptr;
+        CUDA_CHECK(cudaMalloc3DArray(&array, &channelDesc, extent));
+
+        cudaMemcpy3DParms copyParams = {};
+        copyParams.srcPtr = make_cudaPitchedPtr(
+            const_cast<unsigned char*>(dirDist_[s].data()),
+            dims_.x * sizeof(unsigned char), dims_.x, dims_.y);
+        copyParams.dstArray = array;
+        copyParams.extent   = extent;
+        copyParams.kind     = cudaMemcpyHostToDevice;
+        CUDA_CHECK(cudaMemcpy3D(&copyParams));
+
+        cudaResourceDesc resDesc = {};
+        resDesc.resType         = cudaResourceTypeArray;
+        resDesc.res.array.array = array;
+
+        cudaTextureDesc texDesc = {};
+        texDesc.addressMode[0]  = cudaAddressModeClamp;
+        texDesc.addressMode[1]  = cudaAddressModeClamp;
+        texDesc.addressMode[2]  = cudaAddressModeClamp;
+        texDesc.filterMode      = cudaFilterModePoint;
+        texDesc.readMode        = cudaReadModeNormalizedFloat;
+        texDesc.normalizedCoords = 1;
+
+        cudaTextureObject_t tex = 0;
+        CUDA_CHECK(cudaCreateTextureObject(&tex, &resDesc, &texDesc, nullptr));
+
+        dirArrays_[s]   = array;
+        dirTextures_[s] = tex;
+    }
+
+    std::cout << "Directional sector textures: " << dirSectorCount_ << " x "
+              << dims_.x << "x" << dims_.y << "x" << dims_.z << " ("
+              << (dirSectorCount_ * dirDist_[0].size()) / (1024.0 * 1024.0) << " MB total)\n";
 }
