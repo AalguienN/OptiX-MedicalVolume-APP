@@ -8,22 +8,38 @@
 #   PSNR (luma > 5), and the % of pixels that differ by > 10.
 #   Sanity check: optix renders the same full pose as manual so
 #   it must come out pixel-identical (PSNR = inf, SSIM = 1).
-#   Output: /home/adri/projects/TFM/optix_test_results/
+#   Output (default): /home/adri/projects/TFM/optix_test_results/
 #           image_fidelity_metrics.csv
+#
+#   Run on another campaign (e.g. results2, 4042 runs):
+#     venv/bin/python d1_image_fidelity.py \
+#         --results-dir /home/adri/projects/TFM/optix_test_results2 \
+#         --out /home/adri/projects/TFM/optix_test_results2/image_fidelity_metrics.csv
 # ============================================================
+import argparse
+import io
 import os
+import re
+from pathlib import Path
 
-import viz_common as vc
 import numpy as np
 import pandas as pd
 from PIL import Image
 from scipy.ndimage import gaussian_filter
 
+DEFAULT_RESULTS = Path("/home/adri/projects/TFM/optix_test_results")
 OUT_CSV = "/home/adri/projects/TFM/optix_test_results/image_fidelity_metrics.csv"
 FG_THRESH = 5.0        # luminance above this counts as "content", not background
 DIFF_THRESH = 10.0     # |Δ| above this counts as a visibly-changed pixel
 
 _CACHE = {}
+
+
+def load_results(results_dir: Path) -> pd.DataFrame:
+    """Read results.csv of a campaign with the tuple-comma CSV fix."""
+    raw = open(results_dir / "results.csv").read()
+    fixed = re.sub(r"(\([^)]*,[^)]*\))", lambda m: f'"{m.group(1)}"', raw)
+    return pd.read_csv(io.StringIO(fixed))
 
 
 def progress(i, n, width=50):
@@ -75,7 +91,15 @@ def _metrics(a, b):
 
 
 def main():
-    df = vc.load()
+    ap = argparse.ArgumentParser(description="Per-run image fidelity vs manual "
+                                            "reference of a campaign")
+    ap.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS,
+                    help="campaign dir holding results.csv + snapshots")
+    ap.add_argument("--out", default=OUT_CSV,
+                    help="output CSV path")
+    args = ap.parse_args()
+
+    df = load_results(args.results_dir)
     out_rows = []
 
     for i, r in df.iterrows():
@@ -105,8 +129,8 @@ def main():
 
     print()
     out = pd.DataFrame(out_rows)
-    out.to_csv(OUT_CSV, index=False)
-    print(f"\nWrote {len(out)} rows to {OUT_CSV}")
+    out.to_csv(args.out, index=False)
+    print(f"\nWrote {len(out)} rows to {args.out}")
 
     # sanity: optix must be identical to manual
     opt = out[out["mode"] == "optix"]
