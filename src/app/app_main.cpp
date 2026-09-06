@@ -24,6 +24,7 @@
 #include <optix.h>
 #include <optix_stubs.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -102,7 +103,9 @@ void printUsage(const char* prog) {
                 << "  --summary <path>   Append one aggregate metrics row to <path> (CSV) on exit\n"
                 << "  --dataset <label>  Dataset label for the --summary row (default: derived)\n"
                 << "  --strategy <label> Strategy/config label for the --summary row (default: mode)\n"
-                << "  --disk-bytes <n>   Series size on disk (bytes) for the --summary row\n";
+                << "  --disk-bytes <n>   Series size on disk (bytes) for the --summary row\n"
+                 << "  --build-time       Time the load-time construction of the strategy and\n"
+                 << "                     record it as build_time_ms in the aggregate summary row\n";
 }
 
 // Shared per-frame render loop. The Params struct is wired once before this
@@ -222,6 +225,7 @@ static void writeSummaryRow(const char* path,
                             const Volume& volume, const std::string& modality,
                             size_t relCount, size_t relTotal, double relSparse,
                             float scalarMin, float scalarMax, float epsilon,
+                            double buildMs,
                             const MetricsCollector& metrics,
                             const unsigned int dbg[4], double skipRatio,
                             const std::string& snapshotPath)
@@ -229,12 +233,20 @@ static void writeSummaryRow(const char* path,
     if (!path || path[0] == '\0')
         return;
 
-    const char kHeader[] =
+    // build_time_ms (load-time construction time, --build-time) is appended as
+    // an extra column only when it was actually measured, so the schema of
+    // pre-existing results.csv files remains unchanged.
+    const char kHeaderBase[] =
         "dataset,strategy,mode,dicom_series_path,num_slices,modality,slice_dims,"
         "vol_dims,spacing,origin,scalar_min,scalar_max,n_relevant,n_total,sparsity_pct,"
         "uploaded_mb,epsilon,frames,render_mean_ms,render_min_ms,render_max_ms,"
-        "fps_mean,fps_latest,gpu_mem_bytes,latency_latest_ms,"
-        "vol_samples,dist_reads,leaps,total_steps_bounds,skip_ratio_bounds,snapshot_path\n";
+        "fps_mean,fps_latest,gpu_mem_bytes,latency_latest_ms";
+    const char kHeaderTail[] =
+        ",vol_samples,dist_reads,leaps,total_steps_bounds,skip_ratio_bounds,snapshot_path\n";
+    std::string header = kHeaderBase;
+    if (buildMs >= 0.0)
+        header += ",build_time_ms";
+    header += kHeaderTail;
 
     std::FILE* f = std::fopen(path, "a");
     if (!f)
@@ -245,7 +257,7 @@ static void writeSummaryRow(const char* path,
 
     std::fseek(f, 0, SEEK_END);
     if (std::ftell(f) == 0)
-        std::fputs(kHeader, f);
+        std::fputs(header.c_str(), f);
 
     const double latency = metrics.hasLatency() ? metrics.latestLatencyMs() : -1.0;
     const float volumeMB = static_cast<float>(volume.data.size() * sizeof(float) / (1024.0 * 1024.0));
@@ -255,9 +267,7 @@ static void writeSummaryRow(const char* path,
         "%dx%dx%d,(%g,%g,%g),(%g,%g,%g),"
         "%g,%g,%zu,%zu,%.4f,"
         "%g,%g,%u,%.6f,%.6f,%.6f,"
-        "%.6f,%.6f,%zu,%.3f,"
-        "%u,%u,%u,%u,%.6f,"
-        "%s\n",
+        "%.6f,%.6f,%zu,%.3f,",
         dataset ? dataset : "", strategy ? strategy : "", mode ? mode : "",
         seriesPath.c_str(), volume.dimZ, modality.c_str(), volume.dimX, volume.dimY,
         volume.dimX, volume.dimY, volume.dimZ,
@@ -266,7 +276,13 @@ static void writeSummaryRow(const char* path,
         scalarMin, scalarMax, relCount, relTotal, relSparse,
         volumeMB, epsilon, metrics.numFramesRecorded(),
         metrics.meanRenderMs(), metrics.minRenderMs(), metrics.maxRenderMs(),
-        metrics.meanFps(), metrics.latestFps(), metrics.gpuMemoryBytes(), latency,
+        metrics.meanFps(), metrics.latestFps(), metrics.gpuMemoryBytes(), latency);
+
+    if (buildMs >= 0.0)
+        std::fprintf(f, "%.6f,", buildMs);
+
+    std::fprintf(f,
+        "%u,%u,%u,%u,%.6f,%s\n",
         dbg[0], dbg[1], dbg[2], dbg[3], skipRatio,
         snapshotPath.c_str());
 
@@ -299,6 +315,7 @@ int main(int argc, char** argv)
     std::string summaryDataset;     // dataset label for the aggregate row
     std::string summaryStrategy;    // strategy/config label for the aggregate row
     long long summaryDiskBytes = -1; // size-on-disk of the series (bytes) for the row
+    bool summaryBuildTime = false;  // --build-time: time load-time construction
 
     for (int i = 2; i < argc; ++i)
     {
@@ -403,6 +420,10 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--disk-bytes") == 0 && i + 1 < argc)
         {
             summaryDiskBytes = std::atoll(argv[++i]);
+        }
+        else if (std::strcmp(argv[i], "--build-time") == 0)
+        {
+            summaryBuildTime = true;
         }
         else
         {
@@ -529,6 +550,10 @@ int main(int argc, char** argv)
         glfwGetCursorPos(window.handle(), &xpos, &ypos);
         camera.lastPos = make_float2(static_cast<float>(xpos),
                                      static_cast<float>(ypos));
+
+        std::chrono::steady_clock::time_point tBuildStart = {};
+        if (summaryBuildTime)
+            tBuildStart = std::chrono::steady_clock::now();
 
         cudaArray* d_volumeArray = nullptr;
         cudaTextureObject_t volumeTex = 0;
@@ -791,6 +816,15 @@ int main(int argc, char** argv)
 
         metrics.recordGpuMemory();
 
+        double buildMs = -1.0;
+        if (summaryBuildTime)
+        {
+            buildMs = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - tBuildStart)
+                          .count();
+            std::cout << "Construction time: " << buildMs << " ms\n";
+        }
+
         std::cout << "Starting render loop (" << modeLabel << " mode)...\n";
 
         runRenderLoop(window, display, interopBuffer, optixContext, *pipeline,
@@ -817,7 +851,7 @@ int main(int argc, char** argv)
                             summaryDiskBytes, modeLabel, seriesPath,
                             volume, volume.modality,
                             relCount, relTotal, relSparse,
-                            scalarMin, scalarMax, brickEpsilon,
+                            scalarMin, scalarMax, brickEpsilon, buildMs,
                             metrics, dbg, ratio,
                             snapshotPath);
         }
